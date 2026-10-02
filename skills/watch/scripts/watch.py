@@ -19,7 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from config import ConfigError, frame_cap, get_config  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps, validate_controls  # noqa: E402
-from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
+from transcribe import filter_range, format_transcript, parse_vtt, save_vtt  # noqa: E402
 from asr import load_api_key, transcribe_video  # noqa: E402
 from runtime import configure_stdio  # noqa: E402
 
@@ -93,6 +93,11 @@ def main() -> int:
         help="Disable near-duplicate frame removal. Keeps visually identical "
              "frames (static screen recordings, held slides) instead of collapsing them.",
     )
+    ap.add_argument(
+        "--save-subs",
+        action="store_true",
+        help="Save transcribed subtitles to a companion .vtt file next to the source media",
+    )
     ap.add_argument("--sub-lang", default=None, help="Exact caption language preference (default auto/native)")
     ap.add_argument("--question", default=None,
                     help="The user's question about the video or audio.")
@@ -104,6 +109,7 @@ def main() -> int:
 
     config = get_config(backend_override="none" if args.no_asr else args.asr)
     detail = args.detail or config["detail"]
+    save_subs = args.save_subs or config.get("save_subs", False)
     max_frames = args.max_frames if args.max_frames is not None else frame_cap(detail)
     budget_cap = max_frames if max_frames is not None else 100
     start_sec, end_sec = parse_time(args.start), parse_time(args.end)
@@ -211,6 +217,20 @@ def main() -> int:
     elif not track_available and video_path and not meta.get("has_audio"):
         transcript_state = "no audio stream" if not visual_error else "audio metadata unavailable"
 
+    saved_subtitle_path = None
+    if save_subs:
+        if subtitle_path:
+            saved_subtitle_path = subtitle_path
+            print(f"[watch] companion subtitles already exist: {subtitle_path}", file=sys.stderr)
+        elif all_segments:
+            target_vtt = media_path.with_suffix(".vtt") if media_path.suffix.lower() != ".vtt" else media_path.parent / f"{media_path.name}.vtt"
+            try:
+                save_vtt(all_segments, target_vtt)
+                saved_subtitle_path = target_vtt
+                print(f"[watch] saved subtitles to {target_vtt}", file=sys.stderr)
+            except OSError as exc:
+                errors.append(f"Failed to save subtitles to {target_vtt}: {exc}")
+
     transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
     transcript_text = format_transcript(transcript_segments)
     if track_available:
@@ -226,6 +246,8 @@ def main() -> int:
     print(f"- **Source:** {args.source}")
     if video_path:
         print(f"- **Local media:** `{video_path}`")
+    if saved_subtitle_path:
+        print(f"- **Saved subtitles:** `{saved_subtitle_path}`")
     if visual_error:
         print(f"- **Visual status:** {visual_error}")
     if errors:

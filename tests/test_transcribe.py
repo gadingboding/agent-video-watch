@@ -1,6 +1,6 @@
 """VTT syntax, independent repeated speech, and source segment validation."""
 import pytest
-from transcribe import parse_vtt, normalize_segments
+from transcribe import parse_vtt, normalize_segments, format_vtt, save_vtt, format_vtt_timestamp
 
 
 def parse(tmp_path, body):
@@ -38,3 +38,25 @@ def test_overlapping_separate_display_regions_are_not_merged(tmp_path):
     out = parse(tmp_path, 'WEBVTT\n\n00:00.000 --> 00:02.000 line:10%\nHello\n\n00:01.000 --> 00:03.000 line:90%\nHello\n')
     assert len(out) == 2
     assert all(set(s) == {'start', 'end', 'text'} for s in out)
+
+
+def test_format_vtt_timestamp():
+    assert format_vtt_timestamp(0) == "00:00:00.000"
+    assert format_vtt_timestamp(1.5) == "00:00:01.500"
+    assert format_vtt_timestamp(65.123) == "00:01:05.123"
+    assert format_vtt_timestamp(3661.05) == "01:01:01.050"
+
+
+def test_save_and_parse_vtt_roundtrip(tmp_path):
+    segments = [
+        {"start": 1.25, "end": 4.5, "text": "Hello world"},
+        {"start": 5.0, "end": 8.125, "text": "This is a test"},
+    ]
+    vtt_path = tmp_path / "test.vtt"
+    save_vtt(segments, vtt_path)
+    assert vtt_path.is_file()
+    parsed = parse_vtt(str(vtt_path))
+    assert parsed == [
+        {"start": 1.25, "end": 4.5, "text": "Hello world"},
+        {"start": 5.0, "end": 8.125, "text": "This is a test"},
+    ]

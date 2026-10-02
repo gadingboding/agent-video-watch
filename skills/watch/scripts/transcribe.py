@@ -106,6 +106,36 @@ def format_transcript(segments: list[dict]) -> str:
     return '\n'.join(f"[{int(s['start']) // 60:02d}:{int(s['start']) % 60:02d}] {s['text']}" for s in segments)
 
 
+def format_vtt_timestamp(seconds: float) -> str:
+    total_millis = int(round(max(0.0, float(seconds)) * 1000))
+    hours = total_millis // 3_600_000
+    minutes = (total_millis % 3_600_000) // 60_000
+    secs = (total_millis % 60_000) // 1000
+    millis = total_millis % 1000
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+def format_vtt(segments: list[dict]) -> str:
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        text = str(seg.get("text", "")).strip()
+        if not text:
+            continue
+        start_str = format_vtt_timestamp(seg["start"])
+        end_str = format_vtt_timestamp(seg["end"])
+        lines.append(f"{start_str} --> {end_str}")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def save_vtt(segments: list[dict], path: Path | str) -> Path:
+    out = Path(path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(format_vtt(segments), encoding="utf-8")
+    return out
+
+
 if __name__ == '__main__':
     configure_stdio()
     if len(sys.argv) != 2:

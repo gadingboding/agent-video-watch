@@ -82,6 +82,7 @@ python3 "${SKILL_DIR}/scripts/watch.py" "<local-video-or-audio-path>" --question
 | `--resolution W` | Frame width, default 512; raise to 1024 for text when needed |
 | `--fps F` | Positive uniform rate override, at most 2 fps and reduced to fit the remaining cap |
 | `--no-dedup` | Preserve near-identical selected frames |
+| `--save-subs` | Save transcribed subtitles to a companion .vtt file next to the source media |
 | `--asr minimax|groq|openai` | Select this run's fallback ASR backend; captions still come first (alias: `--whisper`) |
 | `--no-asr` | Disable speech fallbacks; conflicts with `--asr` (alias: `--no-whisper`) |
 | `--sub-lang CODE` | Select one exact caption language; default `auto` prefers original-language evidence |

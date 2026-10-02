@@ -219,3 +219,22 @@ def test_cli_asr_flag(monkeypatch, capsys):
     assert watch.main() == 0
     assert called_backend == ['minimax']
 
+
+def test_save_subs_creates_vtt_file(monkeypatch, tmp_path, capsys):
+    media = tmp_path / 'clip.mp4'
+    media.write_bytes(b'video')
+    expected_vtt = tmp_path / 'clip.vtt'
+    assert not expected_vtt.exists()
+
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 10, 'has_audio': True, 'has_video': False})
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('groq', 'dummy'))
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: ([{'start': 0, 'end': 2, 'text': 'saved subtitle test'}], 'groq'))
+    monkeypatch.setattr(sys, 'argv', ['watch', str(media), '--save-subs'])
+
+    assert watch.main() == 0
+    assert expected_vtt.is_file()
+    assert 'saved subtitle test' in expected_vtt.read_text(encoding='utf-8')
+    out = capsys.readouterr().out
+    assert f'Saved subtitles:** `{expected_vtt}`' in out
+
+
