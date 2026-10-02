@@ -82,7 +82,8 @@ python3 "${SKILL_DIR}/scripts/watch.py" "<local-video-or-audio-path>" --question
 | `--resolution W` | Frame width, default 512; raise to 1024 for text when needed |
 | `--fps F` | Positive uniform rate override, at most 2 fps and reduced to fit the remaining cap |
 | `--no-dedup` | Preserve near-identical selected frames |
-| `--save-subs` | Save transcribed subtitles to a companion .vtt file next to the source media |
+| `--save-subs` | Save transcribed subtitles to a companion .vtt file next to the source media (default) |
+| `--no-save-subs` | Disable automatic saving of transcribed subtitles to a companion .vtt file |
 | `--asr minimax|groq|openai` | Select this run's fallback ASR backend; captions still come first (alias: `--whisper`) |
 | `--no-asr` | Disable speech fallbacks; conflicts with `--asr` (alias: `--no-whisper`) |
 | `--sub-lang CODE` | Select one exact caption language; default `auto` prefers original-language evidence |
@@ -115,6 +116,8 @@ Full-track caption availability is checked before focus filtering. A silent focu
 MiniMax ASR supports `MINIMAX_REGION=cn|global` (default: `cn` for `api.minimax.cn`; `global` for `api.minimax.io`). Audio is chunked to stay within MiniMax's 500s duration limit (default 300s chunks) and upload budgets, with source-time offsets restored in stitched segments.
 
 Cloud fallbacks extract mono 16 kHz MP3. Large files are chunked with source-time offsets restored; missing chunks appear in the final report. Provider errors do not justify automatic provider switching.
+
+Transcribed speech is saved by default as a companion WebVTT file (`<media>.vtt`) beside the source file (unless disabled with `--no-save-subs` or `WATCH_SAVE_SUBS=false`). Existing companion subtitles are never overwritten. Subsequent runs on the same media detect and reuse this file automatically, skipping ASR calls and avoiding repeated API costs.
 
 For follow-ups, reuse evidence already viewed before rerunning. Remove only the disposable **Work dir** created by this invocation when no longer needed. Never delete the parent supplied with `--out-dir` or a user source file.
 

@@ -123,7 +123,7 @@ def get_config(*, backend_override: str | None = None) -> dict:
         'whisper_backend': backend,
         'minimax_region': setting('MINIMAX_REGION', 'cn').lower(),
         'sub_lang': setting('WATCH_SUB_LANG', 'auto'),
-        'save_subs': setting('WATCH_SAVE_SUBS', 'false').lower() in ('true', '1', 'yes'),
+        'save_subs': setting('WATCH_SAVE_SUBS', 'true').lower() in ('true', '1', 'yes'),
         'cookies_file': setting('WATCH_COOKIES_FILE'),
         'cookies_from_browser': setting('WATCH_COOKIES_FROM_BROWSER'),
     }

@@ -96,7 +96,14 @@ def main() -> int:
     ap.add_argument(
         "--save-subs",
         action="store_true",
-        help="Save transcribed subtitles to a companion .vtt file next to the source media",
+        default=None,
+        help="Save transcribed subtitles to a companion .vtt file next to the source media (default)",
+    )
+    ap.add_argument(
+        "--no-save-subs",
+        action="store_true",
+        default=False,
+        help="Disable automatic saving of transcribed subtitles to a companion .vtt file",
     )
     ap.add_argument("--sub-lang", default=None, help="Exact caption language preference (default auto/native)")
     ap.add_argument("--question", default=None,
@@ -106,10 +113,17 @@ def main() -> int:
     args.whisper = args.asr
     if args.no_asr and args.asr:
         ap.error("--no-asr conflicts with --asr")
+    if args.save_subs and args.no_save_subs:
+        ap.error("--save-subs conflicts with --no-save-subs")
 
     config = get_config(backend_override="none" if args.no_asr else args.asr)
     detail = args.detail or config["detail"]
-    save_subs = args.save_subs or config.get("save_subs", False)
+    if args.no_save_subs:
+        save_subs = False
+    elif args.save_subs:
+        save_subs = True
+    else:
+        save_subs = config.get("save_subs", True)
     max_frames = args.max_frames if args.max_frames is not None else frame_cap(detail)
     budget_cap = max_frames if max_frames is not None else 100
     start_sec, end_sec = parse_time(args.start), parse_time(args.end)
@@ -217,19 +231,23 @@ def main() -> int:
     elif not track_available and video_path and not meta.get("has_audio"):
         transcript_state = "no audio stream" if not visual_error else "audio metadata unavailable"
 
-    saved_subtitle_path = None
+    newly_saved_subs = None
+    existing_sub_path = subtitle_path
     if save_subs:
-        if subtitle_path:
-            saved_subtitle_path = subtitle_path
-            print(f"[watch] companion subtitles already exist: {subtitle_path}", file=sys.stderr)
+        if existing_sub_path:
+            print(f"[watch] companion subtitles already exist: {existing_sub_path}", file=sys.stderr)
         elif all_segments:
             target_vtt = media_path.with_suffix(".vtt") if media_path.suffix.lower() != ".vtt" else media_path.parent / f"{media_path.name}.vtt"
-            try:
-                save_vtt(all_segments, target_vtt)
-                saved_subtitle_path = target_vtt
-                print(f"[watch] saved subtitles to {target_vtt}", file=sys.stderr)
-            except OSError as exc:
-                errors.append(f"Failed to save subtitles to {target_vtt}: {exc}")
+            if target_vtt.is_file():
+                existing_sub_path = target_vtt
+                print(f"[watch] companion subtitles already exist: {target_vtt}", file=sys.stderr)
+            else:
+                try:
+                    save_vtt(all_segments, target_vtt)
+                    newly_saved_subs = target_vtt
+                    print(f"[watch] saved subtitles to {target_vtt}", file=sys.stderr)
+                except OSError as exc:
+                    errors.append(f"Failed to save subtitles to {target_vtt}: {exc}")
 
     transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
     transcript_text = format_transcript(transcript_segments)
@@ -246,8 +264,10 @@ def main() -> int:
     print(f"- **Source:** {args.source}")
     if video_path:
         print(f"- **Local media:** `{video_path}`")
-    if saved_subtitle_path:
-        print(f"- **Saved subtitles:** `{saved_subtitle_path}`")
+    if newly_saved_subs:
+        print(f"- **Saved subtitles:** `{newly_saved_subs}`")
+    elif existing_sub_path:
+        print(f"- **Companion subtitles:** `{existing_sub_path}`")
     if visual_error:
         print(f"- **Visual status:** {visual_error}")
     if errors:

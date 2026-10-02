@@ -238,3 +238,61 @@ def test_save_subs_creates_vtt_file(monkeypatch, tmp_path, capsys):
     assert f'Saved subtitles:** `{expected_vtt}`' in out
 
 
+def test_default_saves_subs_without_flag(monkeypatch, tmp_path, capsys):
+    media = tmp_path / 'default_clip.mp4'
+    media.write_bytes(b'video')
+    expected_vtt = tmp_path / 'default_clip.vtt'
+    assert not expected_vtt.exists()
+
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 10, 'has_audio': True, 'has_video': False})
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('groq', 'dummy'))
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: ([{'start': 0, 'end': 2, 'text': 'default saved subtitle'}], 'groq'))
+    monkeypatch.setattr(sys, 'argv', ['watch', str(media)])
+
+    assert watch.main() == 0
+    assert expected_vtt.is_file()
+    assert 'default saved subtitle' in expected_vtt.read_text(encoding='utf-8')
+    out = capsys.readouterr().out
+    assert f'Saved subtitles:** `{expected_vtt}`' in out
+
+
+def test_no_save_subs_disables_saving(monkeypatch, tmp_path, capsys):
+    media = tmp_path / 'nosave_clip.mp4'
+    media.write_bytes(b'video')
+    vtt = tmp_path / 'nosave_clip.vtt'
+
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 10, 'has_audio': True, 'has_video': False})
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('groq', 'dummy'))
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: ([{'start': 0, 'end': 2, 'text': 'no save subtitle'}], 'groq'))
+    monkeypatch.setattr(sys, 'argv', ['watch', str(media), '--no-save-subs'])
+
+    assert watch.main() == 0
+    assert not vtt.exists()
+    out = capsys.readouterr().out
+    assert 'Saved subtitles' not in out
+
+
+def test_existing_subs_never_overwritten(monkeypatch, tmp_path, capsys):
+    media = tmp_path / 'existing.mp4'
+    media.write_bytes(b'video')
+    vtt = tmp_path / 'existing.vtt'
+    original_text = "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\noriginal manual subtitle\n"
+    vtt.write_text(original_text, encoding='utf-8')
+
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 10, 'has_audio': True, 'has_video': False})
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: pytest.fail('should not call ASR when subs exist'))
+    monkeypatch.setattr(sys, 'argv', ['watch', str(media)])
+
+    assert watch.main() == 0
+    assert vtt.read_text(encoding='utf-8') == original_text
+    out = capsys.readouterr().out
+    assert f'Companion subtitles:** `{vtt}`' in out
+
+
+def test_save_subs_conflict_rejected(monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['watch', 'clip.mp4', '--save-subs', '--no-save-subs'])
+    with pytest.raises(SystemExit):
+        watch.main()
+
+
+
