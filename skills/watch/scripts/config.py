@@ -13,8 +13,6 @@ CONFIG_FILE = CONFIG_DIR / '.env'
 DEFAULT_DETAIL = 'balanced'
 DETAILS = {'transcript', 'efficient', 'balanced', 'token-burner'}
 BACKENDS = {'auto', 'groq', 'openai', 'whisperx', 'none'}
-ENGINES = {'auto', 'gemini', 'local'}
-DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash'
 
 
 class ConfigError(ValueError):
@@ -109,26 +107,6 @@ def load_api_key(preferred: str | None = None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def load_gemini_key() -> str | None:
-    """Environment, then the user config, then a project .env; never logged."""
-    value = os.environ.get('GEMINI_API_KEY', '').strip()
-    if not value:
-        for path in (CONFIG_FILE, Path.cwd() / '.env'):
-            value = read_env_file(path).get('GEMINI_API_KEY', '').strip()
-            if value:
-                break
-    return value or None
-
-
-def resolve_engine(choice: str, has_key: bool) -> str:
-    if choice not in ENGINES:
-        raise ConfigError('WATCH_ENGINE must be auto, gemini, or local.')
-    if choice == 'gemini' and not has_key:
-        raise ConfigError('The gemini engine needs GEMINI_API_KEY in the environment or '
-                          f'{CONFIG_FILE}. Add it, or rerun with --engine local.')
-    return 'gemini' if choice == 'gemini' or (choice == 'auto' and has_key) else 'local'
-
-
 def get_config(*, backend_override: str | None = None) -> dict:
     file_values = read_env_file()
     def setting(name, default=''):
@@ -137,16 +115,10 @@ def get_config(*, backend_override: str | None = None) -> dict:
     backend = backend_override if backend_override is not None else setting('WATCH_WHISPER_BACKEND', 'auto')
     if backend not in BACKENDS:
         raise ConfigError('WATCH_WHISPER_BACKEND must be auto, groq, openai, whisperx, or none.')
-    engine = setting('WATCH_ENGINE', 'auto')
-    if engine not in ENGINES:
-        raise ConfigError('WATCH_ENGINE must be auto, gemini, or local.')
     return {
         'detail': detail if detail in DETAILS else DEFAULT_DETAIL,
         'config_file': str(CONFIG_FILE),
         'whisper_backend': backend,
-        'engine': engine,
-        'gemini_model': setting('WATCH_GEMINI_MODEL', DEFAULT_GEMINI_MODEL) or DEFAULT_GEMINI_MODEL,
-        'gemini_timeout': positive_number(setting('WATCH_GEMINI_TIMEOUT', '600'), 'WATCH_GEMINI_TIMEOUT'),
         'sub_lang': setting('WATCH_SUB_LANG', 'auto'),
         'cookies_file': setting('WATCH_COOKIES_FILE'),
         'cookies_from_browser': setting('WATCH_COOKIES_FROM_BROWSER'),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -12,6 +13,28 @@ from urllib.parse import urlparse
 from runtime import configure_stdio, diagnostic, run_text
 
 VIDEO_EXTS = {'.mp4', '.mkv', '.webm', '.mov', '.m4v', '.avi', '.flv', '.wmv'}
+
+
+def ytdlp_cmd() -> list[str]:
+    """Resolve command to execute yt-dlp.
+
+    Directly uses uvx with `yt-dlp[default,curl-cffi]` so yt-dlp does not need to be
+    installed locally. Falls back to local uv or yt-dlp if uvx is not in PATH.
+    """
+    name = 'uvx.exe' if sys.platform == 'win32' else 'uvx'
+    uvx = shutil.which(name) or (Path.home() / '.local' / 'bin' / name)
+    if uvx and (isinstance(uvx, str) or uvx.is_file()):
+        return [str(uvx), '--quiet', '--from', 'yt-dlp[default,curl-cffi]', 'yt-dlp']
+
+    uv_name = 'uv.exe' if sys.platform == 'win32' else 'uv'
+    uv = shutil.which(uv_name) or (Path.home() / '.local' / 'bin' / uv_name)
+    if uv and (isinstance(uv, str) or uv.is_file()):
+        return [str(uv), 'tool', 'run', '--quiet', '--from', 'yt-dlp[default,curl-cffi]', 'yt-dlp']
+
+    if shutil.which('yt-dlp'):
+        return ['yt-dlp']
+
+    return ['uvx', '--quiet', '--from', 'yt-dlp[default,curl-cffi]', 'yt-dlp']
 
 
 def is_url(source: str) -> bool:
@@ -39,7 +62,7 @@ def auth_args(cookies_file=None, cookies_from_browser=None) -> list[str]:
 def _common(directory: Path, auth: list[str]) -> list[str]:
     # Escape literal percent signs in the directory, while retaining template fields.
     prefix = str(directory.resolve()).replace('%', '%%')
-    return ['yt-dlp', '--no-playlist', '--no-simulate', *auth,
+    return [*ytdlp_cmd(), '--no-playlist', '--no-simulate', *auth,
             '-o', f'{prefix}/video.%(ext)s',
             '-o', f'subtitle:{prefix}/video.%(ext)s',
             '-o', f'infojson:{prefix}/video.%(ext)s']

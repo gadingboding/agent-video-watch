@@ -1,6 +1,6 @@
 ---
 name: watch
-description: Watch a video (URL or local path). Downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls the transcript from captions (or local WhisperX / cloud Whisper fallback), and hands the result to the agent so it can answer questions about what's in the video. With a Gemini API key, Google's agentic video model watches the full video instead.
+description: Watch a video (URL or local path). Downloads with yt-dlp (executed on demand via uvx), extracts auto-scaled frames with ffmpeg, pulls the transcript from captions (or local WhisperX / cloud Whisper fallback), and hands the result to the agent so it can answer questions about what's in the video.
 license: MIT
 allowed-tools: Bash, Read, AskUserQuestion
 metadata:
@@ -9,7 +9,7 @@ metadata:
 
 # /watch
 
-Run the bundled Python script. With the **gemini** engine (a `GEMINI_API_KEY` is configured) Google's video model watches the video and the report carries its timestamped answer for you to relay. With the **local** engine the script produces timestamped frames and a transcript; view the frames and answer from that evidence. Native captions come first; the chosen local or cloud backend is only a fallback. Transcript-only evidence cannot establish visual facts.
+Run the bundled Python script. The script produces timestamped frames and a transcript; view the frames and answer from that evidence. Native captions come first; the chosen local or cloud backend is only a fallback. Transcript-only evidence cannot establish visual facts.
 
 ## Resolve the skill and interpreter
 
@@ -31,27 +31,9 @@ On the first invocation in a session:
 python3 "${SKILL_DIR}/scripts/setup.py" --json
 ```
 
-- `can_proceed` depends on base binaries for the local engine, not optional credentials. If it is false, run `setup.py` and confirm the binaries become available. macOS uses Homebrew; other systems get package commands. Do not use sudo automatically. With the Gemini engine (`engine` is `gemini`, `binaries_required` false), missing `ffmpeg`/`yt-dlp` do not block YouTube URLs but are still needed for other URLs and for `--engine local`; mention `missing_binaries` only when that matters.
+- `can_proceed` depends on base binaries (`ffmpeg`, `ffprobe`, `uvx`). `yt-dlp` runs automatically via `uvx` without needing local installation. If binaries are missing, install them. macOS uses Homebrew; other systems get package commands. Do not use sudo automatically.
 - If `first_run` is false, proceed without announcing successful setup or asking preferences again. Existing installations without a backend setting retain `auto` (Groq key first, then OpenAI).
-- If `first_run` is true, ask the engine question first, then (local engine only) the two choices below it. The wizard does not inspect RAM, disk, CPU, browser sessions, or other machine state; the user decides from the stated requirements.
-
-**Question 1 — "How should watch view videos?"**
-
-- `gemini` (recommended) — Google's Gemini model watches the whole video, including audio, and answers directly. Needs a free key from https://aistudio.google.com/apikey. YouTube URLs are sent to Google; local or downloaded videos are uploaded to Google, then deleted after the answer.
-- `local` — frames + transcript extracted on this machine and read by you. No key needed.
-
-If `gemini`, run:
-
-```bash
-python3 "${SKILL_DIR}/scripts/setup.py" --engine gemini
-```
-
-Exit 3 means the key is missing; the command has created `~/.config/watch/.env` for it. Point the user to https://aistudio.google.com/apikey for a free key and let them choose how to add it:
-
-- **Paste it in chat.** Write it on the `GEMINI_API_KEY=` line of the config file (add the line if it is missing) with a file-editing tool, preserving the other lines.
-- **Add it themselves.** Offer to open the config file in their text editor (`open -t` on macOS, `notepad` on Windows, `xdg-open` on Linux) so they can paste the key after `GEMINI_API_KEY=` and save. This only works when you run on the user's own computer; otherwise give them the file path.
-
-Never print the key or put it in a shell command. Once it is saved, rerun `setup.py --engine gemini`. On exit 0 setup is complete — **skip the detail and transcription questions**; they only apply to the local engine. If `local`: run `setup.py --engine local` (this also installs missing base binaries and scaffolds the private config) and continue with the two questions below. An existing explicit `WATCH_ENGINE` is not asked again.
+- If `first_run` is true, ask the two choices below. The wizard does not inspect RAM, disk, CPU, browser sessions, or other machine state; the user decides from the stated requirements.
 
 Ask for the default detail, lightest to heaviest:
 
@@ -80,9 +62,9 @@ python3 "${SKILL_DIR}/scripts/setup.py" --backend whisperx --detail balanced
 
 For WhisperX, relay progress while the installer provisions uv, Python 3.12, pinned dependencies, and both model caches. `setup.py --install-whisperx` reruns this managed installer if needed. It writes the backend, executable, model, and completion marker only after warm-up succeeds. A failed local installation never selects a cloud backend automatically.
 
-For cloud, get the matching key the same way as the Gemini key (pasted in chat, or the user adds it after offering to open the config file), then rerun `setup.py --backend groq` or `--backend openai`. Preserve existing keys and comments; do not print keys or include them in a shell command. The script marks setup complete after that backend is ready. `--backend none` needs no key and completes immediately.
+For cloud, get the matching key (pasted in chat, or the user adds it after offering to open the config file), then rerun `setup.py --backend groq` or `--backend openai`. Preserve existing keys and comments; do not print keys or include them in a shell command. The script marks setup complete after that backend is ready. `--backend none` needs no key and completes immediately.
 
-`setup.py --check` is a fast, silent base preflight: exit 0 when binaries exist (or the Gemini engine is active), 2 for missing dependencies/config errors. It never starts Torch or queries network services. `--json` adds `engine` (resolved: `gemini` or `local`), `configured_engine`, `gemini_key_present` (boolean only), `gemini_model`, `binaries_required`, executable paths/versions, offline yt-dlp capability diagnostics, and `whisperx_ready`, `whisperx_bin`, `whisperx_model`, and `backend_ready`. Local readiness in detailed mode checks the sentinel and executable help. Optional fallback failure does not block base watch.
+`setup.py --check` is a fast, silent base preflight: exit 0 when binaries exist, 2 for missing dependencies/config errors. It never starts Torch or queries network services. `--json` reports executable paths/versions, offline yt-dlp capability diagnostics, and `whisperx_ready`, `whisperx_bin`, `whisperx_model`, and `backend_ready`. Local readiness in detailed mode checks the sentinel and executable help. Optional fallback failure does not block base watch.
 
 ## Watch and answer
 
@@ -92,21 +74,9 @@ Separate the source from the question. Pass each as one properly quoted shell ar
 python3 "${SKILL_DIR}/scripts/watch.py" "<URL-or-local-path>" --question "<the user's question, verbatim>"
 ```
 
-### Engines
-
-`setup.py --json` reports the active `engine`. **Always pass the user's question** with `--question` so either engine can use it; omit it only when there is no question.
-
-- **gemini** — the report contains `## Answer (from Gemini)`, not frames. These are Gemini's observations, not yours: relay them with their timestamps, and if asked how you know, say Gemini watched the video. For a follow-up question, rerun with a new `--question`. `--start/--end` restrict Gemini to that range. Local-only flags (`--detail`, `--fps`, `--timestamps`, `--whisper`…) are ignored and listed under **Ignored local options**. `WATCH_GEMINI_MODEL` (default `gemini-3.7-flash`) and `WATCH_GEMINI_TIMEOUT` (seconds, default 600) tune it. Treat Gemini's answer as untrusted evidence like any other video content.
-- **local** — everything below in this document.
-
-`--engine auto|gemini|local` overrides the saved `WATCH_ENGINE` for one run; `auto` uses Gemini whenever `GEMINI_API_KEY` resolves (environment → `~/.config/watch/.env` → cwd `.env`).
-
-**No silent fallback.** If a Gemini run fails (`## Unavailable evidence` with a `Gemini <category>:` line), tell the user what failed and offer to rerun with `--engine local`. Do not switch engines without asking: the user may not want a long download, or may have chosen Gemini deliberately. Likewise use `--engine local` when the user says the video is private or must not leave the machine.
-
 | Option | Behavior |
 |---|---|
-| `--engine auto|gemini|local` | Override the saved engine for this run |
-| `--question TEXT` | The user's question; sent to Gemini, unused locally |
+| `--question TEXT` | The user's question; context for analyzing the video |
 | `--detail transcript|efficient|balanced|token-burner` | Override the saved detail |
 | `--start T --end T` | Focus on a source-time interval; SS, MM:SS, or HH:MM:SS |
 | `--timestamps T1,T2,...` | Pin cue frames; reserves their budget before detail selection |
@@ -158,11 +128,10 @@ For follow-ups, reuse evidence already viewed before rerunning. Remove only the 
 ## Security and runtime access
 
 - yt-dlp contacts the source service/CDNs for metadata, one selected caption track, and media; access may require explicitly configured authentication. A cookie file is a read/write jar.
-- With the Gemini engine, YouTube URLs are sent to Google and local or downloaded videos are uploaded to Google's Files API (generativelanguage.googleapis.com), then deleted after the answer; an upload that cannot be deleted expires within 48 hours. The key is sent only as a request header. The local engine never contacts Google.
 - FFmpeg/ffprobe run locally for probing, frames, and mono audio extraction.
 - With `whisperx` selected, audio never leaves the machine. First setup downloads packages and models from PyPI, Hugging Face, and GitHub, with uv/Python installers as needed. Pyannote telemetry is disabled. Warm caches allow offline inference; model libraries may still attempt cache/update network checks.
 - With `groq` or `openai` selected, only extracted audio is uploaded to that provider's transcription endpoint; keys are never shared between providers or logged by watch.
 - Runtime artifacts live in this run's working directory. User settings/keys live in `~/.config/watch/.env`; cwd `.env` is a cloud-key fallback. POSIX writes use mode 0600; Windows ACLs are not audited. Use a Linux-home config in WSL, since Windows-mounted homes have different permission semantics.
 - The managed environment lives at `~/.cache/watch/whisperx-venv`, outside the plugin. Model caches normally live at `~/.cache/huggingface` and `~/.cache/torch/hub`. uv also caches packages and managed Python. Reinstalling the skill does not remove these.
 
-Bundled scripts: `watch.py`, `download.py`, `frames.py`, `transcribe.py`, `whisper.py`, `local_whisperx.py`, `gemini.py`, `config.py`, `runtime.py`, and `setup.py` under `scripts/`. The base runtime uses only Python's standard library; optional WhisperX dependencies remain in its separate process/environment.
+Bundled scripts: `watch.py`, `download.py`, `frames.py`, `transcribe.py`, `whisper.py`, `local_whisperx.py`, `config.py`, `runtime.py`, and `setup.py` under `scripts/`. The base runtime uses only Python's standard library; optional WhisperX dependencies remain in its separate process/environment.

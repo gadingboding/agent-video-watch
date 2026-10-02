@@ -36,22 +36,9 @@ def test_copied_skill_runs_outside_repository(tmp_path, static_clip):
     assert '**Detail:** balanced' in result.stdout and 'reason=uniform' in result.stdout
 
 
-def test_skill_documents_and_bundles_the_gemini_engine():
+def test_skill_documents_and_bundles_runtime():
     skill = (ROOT / 'skills/watch/SKILL.md').read_text(encoding='utf-8')
-    assert (ROOT / 'skills/watch/scripts/gemini.py').is_file()
-    for needle in ('`gemini.py`', '--engine', '--question', 'GEMINI_API_KEY', '--engine local',
-                   'uploaded to Google', 'Answer (from Gemini)'):
-        assert needle in skill, needle
     assert 'CLAUDE_SKILL_DIR' not in skill
     runtime = sorted(p.name for p in (ROOT / 'skills/watch/scripts').glob('*.py'))
-    assert runtime == ['config.py', 'download.py', 'frames.py', 'gemini.py', 'local_whisperx.py',
+    assert runtime == ['config.py', 'download.py', 'frames.py', 'local_whisperx.py',
                        'runtime.py', 'setup.py', 'transcribe.py', 'watch.py', 'whisper.py']
-
-
-def test_copied_skill_runs_gemini_engine_check_outside_repository(tmp_path):
-    target = tmp_path / 'other host' / 'watch'
-    shutil.copytree(ROOT / 'skills/watch', target, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    env = {k: v for k, v in os.environ.items() if k != 'GEMINI_API_KEY'}
-    result = subprocess.run([sys.executable, str(target / 'scripts/watch.py'), 'https://youtu.be/abc', '--engine', 'gemini'],
-                            capture_output=True, encoding='utf-8', env=env)
-    assert result.returncode != 0 and 'GEMINI_API_KEY' in result.stderr

@@ -129,9 +129,7 @@ You can target an agent explicitly, for example `-a codex`, but Codex users can 
 
 ## Try your first video
 
-**Fastest path — let Gemini watch it.** Get a free [Google AI Studio key](https://aistudio.google.com/apikey). When the setup wizard asks for it, paste it in the chat, or have the agent open `~/.config/watch/.env` in your text editor so you can paste it after `GEMINI_API_KEY=` and save it yourself. Watch then hands the whole video — picture and sound — to Google's agentic video model and relays its timestamped answer. YouTube links need nothing else installed. Local files are uploaded to Google and deleted after the answer.
-
-**No key, or a private video?** Choose `local`. Watch extracts frames and a transcript on your machine (`ffmpeg` + `yt-dlp`), exactly as before. Force it any time with `--engine local`. The walkthrough below uses this no-key path.
+Watch extracts frames and a transcript on your machine (`ffmpeg` + `yt-dlp`). The walkthrough below gets you started with no API keys needed.
 
 1. Give your agent access to a folder containing a **short video**, such as `example.mp4`. Open that folder as your agent's project. Replace the filename below with your own.
 2. Paste this **into the agent's message box**:
@@ -180,22 +178,11 @@ Reopen the terminal and agent after installation so they can find the new tools.
 | Surface | What to know |
 |---|---|
 | **Claude Chat** | Not supported, including uploading `watch.skill` as a custom skill. |
-| **Cowork** (desktop or web) | Not supported. Cowork runs Watch in a cloud environment. The [Gemini engine](#choose-an-engine) can run there, but your `GEMINI_API_KEY` doesn't persist between tasks. The local engine can't fetch most URLs, because most sites block yt-dlp downloads from that environment. |
+| **Cowork** (desktop or web) | Not supported. Cowork runs Watch in a cloud environment where sites block yt-dlp downloads. |
 | **Claude Code on the web** | Uses a cloud environment with its own setup and network settings. The interactive `/plugin` installer is unavailable there. The terminal walkthrough above is for local Claude Code. |
 | **ChatGPT/Codex browser surfaces** | Attaching `watch.skill` to a chat is not a local Codex installation. Use the Codex installer above; a public/workspace plugin listing is a separate distribution route. |
 
 See the official guides for [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web) and [OpenAI plugin surfaces](https://learn.chatgpt.com/docs/plugins).
-
-## Choose an engine
-
-| Setting | Default and behavior |
-|---|---|
-| `WATCH_ENGINE` / `--engine` | `auto`: Gemini when a `GEMINI_API_KEY` resolves, otherwise `local`. `gemini` without a key is an error before any network call. `local` never contacts Google. |
-| `GEMINI_API_KEY` | Looked up in the environment, then `~/.config/watch/.env`, then a cwd `.env`. Sent only as a request header; never logged. |
-| `WATCH_GEMINI_MODEL` | `gemini-3.7-flash`. Free-form, so newer model IDs work without an update. |
-| `WATCH_GEMINI_TIMEOUT` | `600` seconds for the question itself; upload and processing waits are bounded separately. |
-
-On a Gemini run, YouTube URLs go to Google directly; other URLs are downloaded with yt-dlp and, like local files, uploaded to Google's Files API, then deleted after the answer (an upload that cannot be deleted expires within 48 hours). `--start`/`--end` restrict Gemini to that range. Frame and transcription options (`--detail`, `--fps`, `--whisper`, …) apply only to the local engine and are listed as ignored. **Watch never switches engines on its own**: a Gemini failure is reported with its category and you decide whether to rerun with `--engine local`. The rest of this README describes the local engine.
 
 ## Choose a transcription fallback
 
@@ -321,7 +308,6 @@ Ask the agent to run bundled `setup.py --json` for resolved paths/versions, JS-r
 | FFmpeg option failure | Inspect the actual FFmpeg path; watch probes `-fps_mode` and retains advertised `-vsync` compatibility for older builds. |
 | Missing JS runtime/EJS | Update the owning yt-dlp package and follow upstream Deno/EJS setup. |
 | 403 / login challenge | Update yt-dlp to its latest release (see [Updating and troubleshooting](#updating-and-troubleshooting)) and retry once; the agent does this automatically. If the 403 persists, read the original error and use explicit authentication only if you have access. |
-| `Gemini auth` / `quota` / `rejected` / `upload` / `service` / `network` / `response` | The Gemini engine failed: bad or missing key, rate limit, a video Google refused (private, unsupported, too long), a failed upload, a Google-side error, no route to `generativelanguage.googleapis.com`, or an unreadable reply. Nothing ran locally; fix the cause or rerun with `--engine local`. |
 | 429 | Wait before retrying; the service is rate limiting requests. |
 | Explicit hosted egress denial | Check the environment's network settings or use an accessible local source. Cloud ASR/cold model setup still need network access. |
 | Certificate failure | Configure the trusted CA/proxy correctly; do not disable TLS verification. |

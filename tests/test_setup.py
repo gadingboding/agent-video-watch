@@ -107,41 +107,9 @@ def test_none_backend_completion():
     assert config.get_config()['detail'] == 'efficient'
 
 
-def test_gemini_engine_is_ready_without_media_binaries(monkeypatch):
-    monkeypatch.setenv('GEMINI_API_KEY', 'unit-key')
+def test_missing_binaries_blocks_setup(monkeypatch):
     monkeypatch.setattr(setup, '_check_binaries', lambda: list(setup.REQUIRED_BINARIES))
     status = setup._status()
-    assert status['engine'] == 'gemini' and status['configured_engine'] == 'auto'
-    assert status['gemini_key_present'] is True and status['gemini_model'] == 'gemini-3.7-flash'
-    assert status['can_proceed'] is True and status['status'] == 'ready'
-    assert status['binaries_required'] is False
-    assert status['missing_binaries'] == ['ffmpeg', 'ffprobe', 'yt-dlp']
-    assert 'unit-key' not in json.dumps(status)
-    assert setup.cmd_check() == 0
-
-
-def test_local_engine_still_requires_binaries(monkeypatch):
-    monkeypatch.setattr(setup, '_check_binaries', lambda: list(setup.REQUIRED_BINARIES))
-    status = setup._status()
-    assert status['engine'] == 'local' and status['gemini_key_present'] is False
     assert status['can_proceed'] is False and status['binaries_required'] is True
     assert setup.cmd_check() == 2
 
-
-def test_engine_gemini_without_key_writes_choice_and_asks_for_key(monkeypatch, capsys):
-    monkeypatch.setattr(setup, '_check_binaries', lambda: list(setup.REQUIRED_BINARIES))
-    assert setup.cmd_install(engine='gemini') == 3
-    assert 'GEMINI_API_KEY' in capsys.readouterr().err
-    values = config.read_env_file(config.CONFIG_FILE)
-    assert values['WATCH_ENGINE'] == 'gemini' and values.get('SETUP_COMPLETE') != 'true'
-
-
-def test_engine_gemini_with_key_completes_setup_and_preserves_lines(monkeypatch):
-    monkeypatch.setattr(setup, '_check_binaries', lambda: list(setup.REQUIRED_BINARIES))
-    config.CONFIG_DIR.mkdir(parents=True)
-    config.CONFIG_FILE.write_text('# my notes\nGEMINI_API_KEY=unit-key\nGROQ_API_KEY=keep-me\n')
-    assert setup.cmd_install(engine='gemini') == 0
-    text = config.CONFIG_FILE.read_text()
-    assert '# my notes' in text and 'GROQ_API_KEY=keep-me' in text
-    values = config.read_env_file(config.CONFIG_FILE)
-    assert values['WATCH_ENGINE'] == 'gemini' and values['SETUP_COMPLETE'] == 'true'
