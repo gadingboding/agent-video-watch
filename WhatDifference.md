@@ -20,7 +20,7 @@
   - 移除了 `skills/watch/scripts/local_whisperx.py` 以及 `tests/test_local_whisperx.py`。
   - 移除了安装流程中对 PyTorch、CUDA、HuggingFace 模型以及 `whisperx` 虚拟环境（约 1.5GB+）的预下载和配置逻辑，保持插件环境极轻量。
 - **将 `whisper.py` 重构重命名为 `asr.py`**：
-  - 核心脚本重构为 [skills/watch/scripts/asr.py](file:///home/aana/projects/agent-video-watch/skills/watch/scripts/asr.py)，测试文件迁移为 [tests/test_asr.py](file:///home/aana/projects/agent-video-watch/tests/test_asr.py)。
+  - 核心脚本重构为 [skills/video-watch/scripts/asr.py](file:///home/aana/projects/agent-video-watch/skills/video-watch/scripts/asr.py)，测试文件迁移为 [tests/test_asr.py](file:///home/aana/projects/agent-video-watch/tests/test_asr.py)。
   - 不再局限于 Whisper，通用抽象支持语音识别（ASR）各类后端。
 - **新增 MiniMax ASR (`asr-1.0`) 支持**：
   - 针对 MiniMax ASR 单次音频不可超过 500 秒的硬性限制，增加了智能时长切片逻辑（默认 300s/切片），由本地切分多段音频后上传转录，并在客户端完成时间戳平移与字幕重组拼接。
@@ -38,4 +38,9 @@
   - 当通过 ASR 成功转写后，自动将完整转写内容以标准 WebVTT 格式导出为同名 `<media_name>.vtt` 文件，保存在媒体文件的同级目录下，并在分析报告中明确展示保存路径。
 - **自动复用与避免重复消耗 API**：
   - 由于系统原生支持优先检测并加载同名伴随字幕文件（`.vtt`），一旦生成并保存，后续再次分析同一音视频时将自动直接读取本地字幕，不再重复调用云端 ASR，大幅节省 API 费用和分析等待时间。
+
+### 5. Skill 规范化重命名为 `video-watch`
+- 将原先过于通用的 `watch` 重命名为更具特异性与可读性的 `video-watch`。
+- 核心目录迁移为 `skills/video-watch/`，触发 Slash Command 更新为 `/video-watch`。
+- 同步更新 Claude Code 与 Codex 插件元数据（`plugin.json`、`marketplace.json`），避免与系统命令或其它文件监视类技能重名冲突，便于直接作为独立 Skill 纳入通用 Agent Skills 项目管理。
 

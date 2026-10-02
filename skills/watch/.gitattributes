@@ -1,6 +1,0 @@
-# These paths are relative to the self-contained skill, including subtree archives.
-.gitattributes          export-ignore
-.skillignore            export-ignore
-scripts/build-skill.sh  export-ignore
-__pycache__/            export-ignore
-*.pyc                   export-ignore

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 # Make the bundled scripts importable (mirrors watch.py's sys.path insert).
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "watch" / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "skills" / "video-watch" / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 

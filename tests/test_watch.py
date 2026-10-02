@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WATCH = Path(__file__).resolve().parent.parent / "skills" / "watch" / "scripts" / "watch.py"
+WATCH = Path(__file__).resolve().parent.parent / "skills" / "video-watch" / "scripts" / "watch.py"
 
 
 def _run(clip: Path, *args: str, env_extra: dict | None = None) -> str:

@@ -15,7 +15,7 @@ def test_hook_handles_setup_failure_and_spaced_plugin_path(tmp_path, code):
     if not bash or os.name == 'nt':
         pytest.skip('Bash fixture runs on POSIX; Windows runtime checks are separate')
     plugin = tmp_path / 'plugin with spaces'
-    script = plugin / 'skills/watch/scripts/setup.py'
+    script = plugin / 'skills/video-watch/scripts/setup.py'
     script.parent.mkdir(parents=True)
     script.write_text(f'raise SystemExit({code})\n')
     result = subprocess.run([bash, str(HOOK)], env={**os.environ, 'CLAUDE_PLUGIN_ROOT': str(plugin)}, capture_output=True, text=True)
@@ -48,7 +48,7 @@ def test_hooks_json_command_survives_spaced_plugin_root(tmp_path):
     plugin = tmp_path / 'plugin with spaces'
     (plugin / 'hooks/scripts').mkdir(parents=True)
     shutil.copy(HOOK, plugin / 'hooks/scripts/check-setup.sh')
-    setup = plugin / 'skills/watch/scripts/setup.py'
+    setup = plugin / 'skills/video-watch/scripts/setup.py'
     setup.parent.mkdir(parents=True)
     setup.write_text('raise SystemExit(0)\n')
     result = subprocess.run([bash, '-c', command], env={**os.environ, 'CLAUDE_PLUGIN_ROOT': str(plugin)},

@@ -1,5 +1,5 @@
 ---
-name: watch
+name: video-watch
 description: Watch and analyze a local video or audio file. Extracts auto-scaled frames with ffmpeg, pulls the transcript from companion captions (or MiniMax ASR / cloud Whisper fallback), and hands the result to the agent so it can answer questions about what's in the media.
 license: MIT
 allowed-tools: Bash, Read, AskUserQuestion
@@ -7,7 +7,7 @@ metadata:
   version: "0.3.2"
 ---
 
-# /watch
+# /video-watch
 
 Run the bundled Python script. The script produces timestamped frames and a transcript; view the frames and answer from that evidence. Native companion captions come first; the chosen cloud ASR backend is only a fallback. Transcript-only evidence cannot establish visual facts.
 
