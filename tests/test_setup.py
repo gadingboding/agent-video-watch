@@ -94,8 +94,8 @@ def test_permission_diagnostics(monkeypatch, tmp_path, capsys, system, mode, war
     assert bool(capsys.readouterr().err) == warns
 
 
-def test_check_never_launches_whisperx(monkeypatch):
-    config.write_settings({'WATCH_WHISPER_BACKEND': 'whisperx'})
+def test_check_never_launches_probe(monkeypatch):
+    config.write_settings({'WATCH_WHISPER_BACKEND': 'minimax'})
     monkeypatch.setattr(setup, '_probe', lambda *a: pytest.fail('check must be lightweight'))
     assert setup.cmd_check() == 0
 

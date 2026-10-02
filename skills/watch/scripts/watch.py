@@ -21,7 +21,7 @@ from config import ConfigError, frame_cap, get_config  # noqa: E402
 from download import download, fetch_captions, is_url, auth_args  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps, validate_controls  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from whisper import load_api_key, transcribe_video  # noqa: E402
+from asr import load_api_key, transcribe_video  # noqa: E402
 from runtime import configure_stdio  # noqa: E402
 
 
@@ -53,15 +53,19 @@ def main() -> int:
     ap.add_argument("--end", type=str, default=None, help="Range end (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--out-dir", type=str, default=None, help="Working directory (default: tmp)")
     ap.add_argument(
+        "--no-asr",
         "--no-whisper",
+        dest="no_asr",
         action="store_true",
-        help="Disable all local/cloud transcription fallbacks; native captions still work.",
+        help="Disable all external ASR transcription fallbacks; native captions still work.",
     )
     ap.add_argument(
+        "--asr",
         "--whisper",
-        choices=["groq", "openai", "whisperx"],
+        dest="asr",
+        choices=["groq", "openai", "minimax"],
         default=None,
-        help="Select the fallback backend for this run; native captions still come first.",
+        help="Select the fallback ASR backend for this run (groq, openai, minimax); native captions still come first.",
     )
     ap.add_argument(
         "--no-dedup",
@@ -76,17 +80,19 @@ def main() -> int:
     ap.add_argument("--question", default=None,
                     help="The user's question about the video.")
     args = ap.parse_args()
-    if args.no_whisper and args.whisper:
-        ap.error("--no-whisper conflicts with --whisper")
+    args.no_whisper = args.no_asr
+    args.whisper = args.asr
+    if args.no_asr and args.asr:
+        ap.error("--no-asr conflicts with --asr")
 
-    config = get_config(backend_override="none" if args.no_whisper else args.whisper)
+    config = get_config(backend_override="none" if args.no_asr else args.asr)
     detail = args.detail or config["detail"]
     max_frames = args.max_frames if args.max_frames is not None else frame_cap(detail)
     budget_cap = max_frames if max_frames is not None else 100
     start_sec, end_sec = parse_time(args.start), parse_time(args.end)
     validate_controls(args.resolution, max_frames, start_sec, end_sec, args.fps)
     cue_timestamps = parse_timestamps(args.timestamps)
-    backend_choice = "none" if args.no_whisper else args.whisper or config["whisper_backend"]
+    backend_choice = "none" if args.no_asr else (args.asr or config.get("asr_backend") or config.get("whisper_backend"))
     cookies_file = args.cookies if args.cookies is not None else (None if args.cookies_from_browser else config["cookies_file"])
     cookies_browser = args.cookies_from_browser if args.cookies_from_browser is not None else (None if args.cookies else config["cookies_from_browser"])
     auth_args(cookies_file, cookies_browser)  # Validate even before starting network work.
@@ -192,16 +198,15 @@ def main() -> int:
 
     transcript_state = "missing"
     if not track_available and backend_choice != "none" and video_path and meta.get("has_audio"):
-        backend, api_key = ("whisperx", None) if backend_choice == "whisperx" else load_api_key(None if backend_choice == "auto" else backend_choice)
+        backend, api_key = load_api_key(None if backend_choice == "auto" else backend_choice)
         if backend:
             try:
                 all_segments, used_backend = transcribe_video(video_path, work / "audio.mp3", backend=backend, api_key=api_key)
                 gaps = getattr(all_segments, "gaps", [])
                 track_available = True
                 transcript_state = "no speech" if not all_segments else "available"
-                if used_backend == "whisperx":
-                    language = config["whisperx_language"] or "auto (unverified)"
-                    transcript_source = f"whisper (whisperx {config['whisperx_model']}, language {language})"
+                if used_backend == "minimax":
+                    transcript_source = "minimax (asr-1.0)"
                 else:
                     transcript_source = f"whisper ({used_backend})"
             except SystemExit as exc:

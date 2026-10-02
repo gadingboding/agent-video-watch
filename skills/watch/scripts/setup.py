@@ -17,12 +17,16 @@ from config import (CONFIG_DIR, CONFIG_FILE, ConfigError, DETAILS, get_config,
 from runtime import configure_stdio, diagnostic, run_text
 
 REQUIRED_BINARIES = ['ffmpeg', 'ffprobe']
-WHISPERX_VERSION = '3.8.6'
 _PERM_WARNED: set[str] = set()
 ENV_TEMPLATE = '''# /watch configuration. No shell interpolation; last assignment wins.
-# Native captions always come first. Optional fallback: auto|whisperx|groq|openai|none.
-# auto preserves the Groq-then-OpenAI preference for existing installations.
-# The first-run skill wizard sets WATCH_DETAIL and WATCH_WHISPER_BACKEND.
+# Native captions always come first. Optional fallback: auto|minimax|groq|openai|none.
+# auto checks MINIMAX_API_KEY, GROQ_API_KEY, then OPENAI_API_KEY.
+# The first-run skill wizard sets WATCH_DETAIL and WATCH_ASR_BACKEND.
+
+# MiniMax ASR: set MINIMAX_REGION to 'cn' (api.minimax.cn, default) or 'global' (api.minimax.io)
+MINIMAX_API_KEY=
+MINIMAX_REGION=cn
+
 GROQ_API_KEY=
 OPENAI_API_KEY=
 '''
@@ -138,22 +142,6 @@ def _probe(cmd):
         return {'ok': False, 'output': str(exc)}
 
 
-def _whisperx_status(cfg, detailed=False):
-    from local_whisperx import sentinel_for
-    value = cfg['whisperx_bin']
-    executable = Path(value) if value else None
-    ready = bool(executable and executable.is_absolute() and executable.is_file() and sentinel_for(executable).is_file())
-    if ready and detailed:
-        # Explicit detailed diagnostics may start the CLI. --check never does.
-        try:
-            from local_whisperx import child_env
-            result = run_text([str(executable), '--help'], timeout=30, env=child_env())
-            ready = result.returncode == 0 and '--no_align' in result.stdout
-        except SystemExit:
-            ready = False
-    return ready
-
-
 def _status(detailed=False):
     missing = _check_binaries()
     _check_file_permissions(CONFIG_FILE)
@@ -162,16 +150,14 @@ def _status(detailed=False):
     has_key, detected = _have_api_key()
     chosen = cfg['whisper_backend']
     backend = detected if chosen == 'auto' else chosen
-    local_ready = _whisperx_status(cfg, detailed)
-    backend_ready = local_ready if chosen == 'whisperx' else (bool(load_api_key(backend)[1]) if backend in ('groq', 'openai') else chosen == 'none')
+    backend_ready = bool(load_api_key(backend)[1]) if backend in ('minimax', 'groq', 'openai') else chosen == 'none'
     blocked = bool(missing)
     result = {'status': 'needs_install' if blocked else 'ready', 'can_proceed': not blocked,
               'binaries_required': binaries_required,
               'first_run': is_first_run(), 'setup_complete': not is_first_run(),
-              'missing_binaries': missing, 'whisper_backend': backend, 'configured_backend': chosen,
+              'missing_binaries': missing, 'whisper_backend': backend, 'asr_backend': backend, 'configured_backend': chosen,
               'has_api_key': has_key, 'backend_ready': backend_ready,
-              'whisperx_ready': local_ready, 'whisperx_bin': cfg['whisperx_bin'],
-              'whisperx_model': cfg['whisperx_model'], 'config_file': str(CONFIG_FILE),
+              'config_file': str(CONFIG_FILE),
               'watch_detail': cfg['detail'], 'platform': platform.system()}
     if detailed:
         from download import ytdlp_cmd
@@ -193,7 +179,7 @@ def _status(detailed=False):
 
 
 def cmd_check():
-    # Optional credentials and local-model readiness never block base watch.
+    # Optional credentials never block base watch.
     status = _status()
     if status['can_proceed']:
         return 0
@@ -221,91 +207,13 @@ def cmd_install(backend=None, detail=None):
     _scaffold_env()
     if detail:
         write_settings({'WATCH_DETAIL': detail}, CONFIG_FILE)
-    if backend == 'whisperx':
-        return install_whisperx()
     if backend:
-        write_settings({'WATCH_WHISPER_BACKEND': backend}, CONFIG_FILE)
-        if backend in ('groq', 'openai') and not load_api_key(backend)[1]:
+        write_settings({'WATCH_ASR_BACKEND': backend, 'WATCH_WHISPER_BACKEND': backend}, CONFIG_FILE)
+        if backend in ('minimax', 'groq', 'openai') and not load_api_key(backend)[1]:
             print(f'[setup] Base watch is ready. Add {backend.upper()}_API_KEY privately to {CONFIG_FILE}, then rerun --backend {backend}.', file=sys.stderr)
             return 3
         _write_setup_complete()
     print(f'[setup] Base watch is ready. Configuration: {CONFIG_FILE}')
-    return 0
-
-
-def _ensure_uv():
-    name = 'uv.exe' if platform.system() == 'Windows' else 'uv'
-    installed = _which('uv')
-    fallback = Path.home() / '.local' / 'bin' / name
-    if installed or fallback.is_file():
-        return installed or str(fallback)
-    system = platform.system()
-    if system == 'Darwin':
-        if not _which('brew'):
-            raise SystemExit('WhisperX setup needs uv. Install Homebrew from https://brew.sh, then rerun setup.')
-        _install_step(['brew', 'install', 'uv'], 'Install uv')
-    elif system == 'Windows':
-        _install_step(['powershell', '-NoProfile', '-ExecutionPolicy', 'ByPass', '-c', 'irm https://astral.sh/uv/install.ps1 | iex'], 'Install uv')
-    elif system == 'Linux':
-        # Fetch first: a failed curl must not be hidden by a successful empty sh.
-        with tempfile.TemporaryDirectory(prefix='watch-uv-') as temporary:
-            script = Path(temporary) / 'install.sh'
-            _install_step(['curl', '-LsSf', 'https://astral.sh/uv/install.sh', '-o', script], 'Download uv installer')
-            _install_step(['sh', script], 'Install uv')
-    else:
-        raise SystemExit('Install uv from https://docs.astral.sh/uv/ before retrying WhisperX setup.')
-    installed = _which('uv')
-    if installed or fallback.is_file():
-        return installed or str(fallback)
-    raise SystemExit('uv installed but could not be found; reopen your terminal and rerun setup.')
-
-
-def install_whisperx():
-    from local_whisperx import settings, transcribe_audio
-    print('[setup] Local WhisperX: requires 3 GB free disk, 8 GB RAM, a 64-bit CPU, and network access for setup. '
-          'Downloads about 1 GB of packages plus the 464 MB small model. macOS Apple Silicon is verified; '
-          'Intel macOS, Linux, Windows, and CUDA installs are untested.', file=sys.stderr, flush=True)
-    if not _which('ffmpeg'):
-        raise SystemExit('Install FFmpeg first, then rerun setup.py --install-whisperx.')
-    cfg = settings()
-    # Check the existing config before downloading or modifying an environment.
-    _scaffold_env()
-    uv = _ensure_uv()
-    venv = Path.home() / '.cache' / 'watch' / 'whisperx-venv'
-    sentinel = venv / '.deps-ok'
-    windows = platform.system() == 'Windows'
-    python = venv / ('Scripts/python.exe' if windows else 'bin/python')
-    executable = venv / ('Scripts/whisperx.exe' if windows else 'bin/whisperx')
-    ready = sentinel.is_file() and python.is_file() and executable.is_file()
-    if not ready:
-        if venv.is_symlink():
-            raise SystemExit('Managed WhisperX venv is a symlink; choose a regular managed directory before installing.')
-        if venv.exists():
-            shutil.rmtree(venv)  # Only this fixed, installer-owned environment.
-        venv.parent.mkdir(parents=True, exist_ok=True)
-        _install_step([uv, 'venv', str(venv), '--python', '3.12'], 'Create WhisperX Python 3.12 environment')
-        if platform.system() in ('Linux', 'Windows'):
-            _install_step([uv, 'pip', 'install', '--python', python, 'torch==2.8.0', 'torchaudio==2.8.0',
-                           '--index-url', 'https://download.pytorch.org/whl/cpu'], 'Install CPU PyTorch wheels')
-        _install_step([uv, 'pip', 'install', '--python', python, f'whisperx=={WHISPERX_VERSION}'], 'Install WhisperX')
-    # Invalidate before warm-up: an interrupted repair is always safe to rerun.
-    sentinel.unlink(missing_ok=True)
-    cfg['whisperx_bin'] = str(executable)
-    with tempfile.TemporaryDirectory(prefix='watch-warmup-') as temporary:
-        audio = Path(temporary) / 'silence.mp3'
-        _install_step(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
-                       'anullsrc=r=16000:cl=mono', '-t', '2', '-acodec', 'libmp3lame', str(audio)], 'Create warm-up audio')
-        transcribe_audio(audio, cfg, require_ready=False)
-    resolved = run_text([str(uv), 'pip', 'list', '--python', str(python), '--format', 'json'], timeout=60)
-    if resolved.returncode:
-        raise SystemExit(f'Could not record the WhisperX install: {diagnostic(resolved.stderr)}')
-    packages = json.loads(resolved.stdout)
-    (venv / 'watch-install.json').write_text(json.dumps({'whisperx': WHISPERX_VERSION, 'model': cfg['whisperx_model'],
-                                                       'platform': platform.system(), 'packages': packages}, indent=2), encoding='utf-8')
-    sentinel.write_text(WHISPERX_VERSION + '\n', encoding='utf-8')
-    write_settings({'WATCH_WHISPER_BACKEND': 'whisperx', 'WATCH_WHISPERX_BIN': str(executable),
-                    'WATCH_WHISPERX_MODEL': cfg['whisperx_model'], 'SETUP_COMPLETE': 'true'}, CONFIG_FILE)
-    print('[setup] WhisperX is ready; packages and both model caches are warmed.', file=sys.stderr)
     return 0
 
 
@@ -314,8 +222,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true')
     mode.add_argument('--json', action='store_true')
-    mode.add_argument('--install-whisperx', action='store_true')
-    parser.add_argument('--backend', choices=['auto', 'whisperx', 'groq', 'openai', 'none'])
+    parser.add_argument('--backend', choices=['auto', 'minimax', 'groq', 'openai', 'none'])
     parser.add_argument('--detail', choices=sorted(DETAILS))
     args = parser.parse_args()
     try:
@@ -323,7 +230,7 @@ def main():
             return cmd_check()
         if args.json:
             return cmd_json()
-        return cmd_install('whisperx' if args.install_whisperx else args.backend, args.detail)
+        return cmd_install(args.backend, args.detail)
     except (ConfigError, OSError, ValueError) as exc:
         print(f'[setup] {exc}', file=sys.stderr)
         return 2

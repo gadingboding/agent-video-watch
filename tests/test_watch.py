@@ -147,28 +147,28 @@ def test_partial_report_includes_missing_intervals(monkeypatch, capsys):
     assert 'partial; missing intervals' in out and '00:10 → 00:20' in out
 
 
-def test_no_whisper_disables_configured_local_backend(monkeypatch):
+def test_no_whisper_disables_configured_backend(monkeypatch):
     _mock_audio(monkeypatch)
-    monkeypatch.setenv('WATCH_WHISPER_BACKEND', 'whisperx')
+    monkeypatch.setenv('WATCH_WHISPER_BACKEND', 'minimax')
     monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: pytest.fail('fallback disabled'))
     monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--detail', 'transcript', '--no-whisper'])
     assert watch.main() == 0
 
 
-def test_local_failure_does_not_resolve_cloud(monkeypatch, capsys):
+def test_backend_failure_exits_with_error(monkeypatch, capsys):
     _mock_audio(monkeypatch)
-    monkeypatch.setattr(watch, 'load_api_key', lambda *a: pytest.fail('no cloud fallback'))
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('minimax', 'key'))
     def fail(*a, **kw):
-        assert kw['backend'] == 'whisperx'
-        raise SystemExit('local model failed')
+        assert kw['backend'] == 'minimax'
+        raise SystemExit('minimax failed')
     monkeypatch.setattr(watch, 'transcribe_video', fail)
-    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--detail', 'transcript', '--whisper', 'whisperx'])
+    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--detail', 'transcript', '--whisper', 'minimax'])
     assert watch.main() == 1
-    assert 'local model failed' in capsys.readouterr().out
+    assert 'minimax failed' in capsys.readouterr().out
 
 
 def test_contradictory_flags_rejected(monkeypatch):
-    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--no-whisper', '--whisper', 'whisperx'])
+    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--no-whisper', '--whisper', 'minimax'])
     with pytest.raises(SystemExit):
         watch.main()
 
@@ -194,4 +194,25 @@ def test_watch_extracts_frames(monkeypatch, static_clip, capsys):
     monkeypatch.setattr(sys, 'argv', ['watch', str(static_clip), '--no-whisper'])
     assert watch.main() == 0
     assert '## Frames' in capsys.readouterr().out
+
+
+def test_no_asr_disables_configured_backend(monkeypatch):
+    _mock_audio(monkeypatch)
+    monkeypatch.setenv('WATCH_ASR_BACKEND', 'minimax')
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: pytest.fail('fallback disabled'))
+    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--detail', 'transcript', '--no-asr'])
+    assert watch.main() == 0
+
+
+def test_cli_asr_flag(monkeypatch, capsys):
+    _mock_audio(monkeypatch)
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('minimax', 'key'))
+    called_backend = []
+    def fake_transcribe(*a, **kw):
+        called_backend.append(kw.get('backend'))
+        return [{'start': 0, 'end': 1, 'text': 'ok'}], 'minimax'
+    monkeypatch.setattr(watch, 'transcribe_video', fake_transcribe)
+    monkeypatch.setattr(sys, 'argv', ['watch', 'video.mp4', '--detail', 'transcript', '--asr', 'minimax'])
+    assert watch.main() == 0
+    assert called_backend == ['minimax']
 

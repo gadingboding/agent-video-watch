@@ -1,6 +1,6 @@
 # WhatDifference
 
-本项目相较于 upstream 主线（`bradautomates/claude-video`）进行了以下两项变更：
+本项目相较于 upstream 主线（`bradautomates/claude-video`）进行了以下变更：
 
 ### 1. 完全移除 Gemini 模式，仅保留纯本地运行
 - 彻底移除 Google Gemini 云端多模态视频分析，不向 Google 上传任何视频文件，仅保留本地抽帧与字幕转录。
@@ -12,3 +12,20 @@
 - 无需本地预装 `yt-dlp`，改为在需要时直接通过 `uvx --quiet --from "yt-dlp[default,curl-cffi]" yt-dlp` 运行。
 - `download.py` 中新增 `ytdlp_cmd()` 优先调用 `uvx`。
 - `setup.py` 中的基础前置依赖由系统安装 `yt-dlp` 改为依赖 `uvx`。
+
+### 3. ASR（语音识别）服务重构与 MiniMax ASR 支持
+- **移除本地 WhisperX 及其重型依赖**：
+  - 移除了 `skills/watch/scripts/local_whisperx.py` 以及 `tests/test_local_whisperx.py`。
+  - 移除了安装流程中对 PyTorch、CUDA、HuggingFace 模型以及 `whisperx` 虚拟环境（约 1.5GB+）的预下载和配置逻辑，保持插件环境极轻量。
+- **将 `whisper.py` 重构重命名为 `asr.py`**：
+  - 核心脚本重构为 [skills/watch/scripts/asr.py](file:///home/aana/projects/agent-video-watch/skills/watch/scripts/asr.py)，测试文件迁移为 [tests/test_asr.py](file:///home/aana/projects/agent-video-watch/tests/test_asr.py)。
+  - 不再局限于 Whisper，通用抽象支持语音识别（ASR）各类后端。
+- **新增 MiniMax ASR (`asr-1.0`) 支持**：
+  - 针对 MiniMax ASR 单次音频不可超过 500 秒的硬性限制，增加了智能时长切片逻辑（默认 300s/切片），由本地切分多段音频后上传转录，并在客户端完成时间戳平移与字幕重组拼接。
+  - 支持国内（`api.minimax.cn`，默认）与海外（`api.minimax.io`）双域名区域切换，支持通过 `MINIMAX_REGION`（`cn` 或 `global`）或 `MINIMAX_BASE_URL` / `MINIMAX_ENDPOINT` 自由配置。
+  - 针对 MiniMax 国内与海外账户 Key 不互通的问题，增加了 401 专属排障友好提示。
+- **保留云端 Whisper 支持**：
+  - 保留 Groq（`whisper-large-v3`）与 OpenAI（`whisper-1`）云端转录支持。
+- **CLI 参数与环境变量全面适配并保持向后兼容**：
+  - 命令行新增 `--asr <minimax|groq|openai>` 与 `--no-asr` 参数，同时保留旧的 `--whisper` 与 `--no-whisper` 作为别名无缝兼容。
+  - 环境变量及配置文件新增 `WATCH_ASR_BACKEND`，同时回退读取兼容旧的 `WATCH_WHISPER_BACKEND`。

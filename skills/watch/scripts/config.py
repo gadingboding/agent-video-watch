@@ -12,7 +12,7 @@ CONFIG_DIR = Path.home() / '.config' / 'watch'
 CONFIG_FILE = CONFIG_DIR / '.env'
 DEFAULT_DETAIL = 'balanced'
 DETAILS = {'transcript', 'efficient', 'balanced', 'token-burner'}
-BACKENDS = {'auto', 'groq', 'openai', 'whisperx', 'none'}
+BACKENDS = {'auto', 'minimax', 'groq', 'openai', 'none'}
 
 
 class ConfigError(ValueError):
@@ -92,7 +92,7 @@ def write_settings(values: dict[str, str], path: Path | None = None) -> None:
 
 
 def load_api_key(preferred: str | None = None) -> tuple[str | None, str | None]:
-    candidates = [('groq', 'GROQ_API_KEY'), ('openai', 'OPENAI_API_KEY')]
+    candidates = [('minimax', 'MINIMAX_API_KEY'), ('groq', 'GROQ_API_KEY'), ('openai', 'OPENAI_API_KEY')]
     for backend, name in candidates:
         if preferred is not None and backend != preferred:
             continue
@@ -112,23 +112,19 @@ def get_config(*, backend_override: str | None = None) -> dict:
     def setting(name, default=''):
         return os.environ.get(name, file_values.get(name, default)).strip()
     detail = setting('WATCH_DETAIL', DEFAULT_DETAIL)
-    backend = backend_override if backend_override is not None else setting('WATCH_WHISPER_BACKEND', 'auto')
+    raw_backend = setting('WATCH_ASR_BACKEND') or setting('WATCH_WHISPER_BACKEND', 'auto')
+    backend = backend_override if backend_override is not None else raw_backend
     if backend not in BACKENDS:
-        raise ConfigError('WATCH_WHISPER_BACKEND must be auto, groq, openai, whisperx, or none.')
+        raise ConfigError('WATCH_ASR_BACKEND (or WATCH_WHISPER_BACKEND) must be auto, minimax, groq, openai, or none.')
     return {
         'detail': detail if detail in DETAILS else DEFAULT_DETAIL,
         'config_file': str(CONFIG_FILE),
+        'asr_backend': backend,
         'whisper_backend': backend,
+        'minimax_region': setting('MINIMAX_REGION', 'cn').lower(),
         'sub_lang': setting('WATCH_SUB_LANG', 'auto'),
         'cookies_file': setting('WATCH_COOKIES_FILE'),
         'cookies_from_browser': setting('WATCH_COOKIES_FROM_BROWSER'),
-        'whisperx_bin': setting('WATCH_WHISPERX_BIN'),
-        'whisperx_model': setting('WATCH_WHISPERX_MODEL', 'small'),
-        'whisperx_device': setting('WATCH_WHISPERX_DEVICE', 'cpu'),
-        'whisperx_compute_type': setting('WATCH_WHISPERX_COMPUTE_TYPE', 'int8'),
-        'whisperx_batch_size': setting('WATCH_WHISPERX_BATCH_SIZE', '8'),
-        'whisperx_language': setting('WATCH_WHISPERX_LANGUAGE'),
-        'whisperx_timeout': setting('WATCH_WHISPERX_TIMEOUT'),
     }
 
 

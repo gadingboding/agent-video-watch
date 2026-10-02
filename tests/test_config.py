@@ -26,7 +26,7 @@ def test_get_config_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("WATCH_DETAIL", raising=False)
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "missing.env")
     cfg = config.get_config()
-    assert {"detail", "config_file", "whisper_backend", "whisperx_model", "sub_lang"} <= set(cfg)
+    assert {"detail", "config_file", "whisper_backend", "sub_lang"} <= set(cfg)
 
 
 def test_frame_cap_mapping():
@@ -74,3 +74,9 @@ def test_user_file_beats_project_file(monkeypatch):
     assert config.load_api_key() == ('groq', 'user-test')
     monkeypatch.setenv('GROQ_API_KEY', 'environment-test')
     assert config.load_api_key() == ('groq', 'environment-test')
+
+
+def test_minimax_api_key_loading(monkeypatch):
+    monkeypatch.setenv('MINIMAX_API_KEY', 'minimax-test')
+    assert config.load_api_key() == ('minimax', 'minimax-test')
+    assert config.load_api_key('minimax') == ('minimax', 'minimax-test')

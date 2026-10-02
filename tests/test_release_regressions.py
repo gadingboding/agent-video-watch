@@ -7,7 +7,7 @@ import pytest
 import config
 import frames
 import transcribe
-import whisper
+import asr
 from conftest import build_static_clip
 
 
@@ -49,9 +49,9 @@ def test_helper_resolves_only_matching_key(monkeypatch, tmp_path, backend):
     def key(preferred=None):
         assert preferred == backend
         return backend, 'dummy'
-    monkeypatch.setattr(whisper, 'load_api_key', key)
+    monkeypatch.setattr(asr, 'load_api_key', key)
     audio = tmp_path / 'audio.mp3'
     audio.write_bytes(b'audio')
-    monkeypatch.setattr(whisper, 'extract_audio', lambda *a: audio)
-    monkeypatch.setattr(whisper, '_transcribe_file', lambda b, k, p: [{'start': 0, 'end': 1, 'text': 'ok'}])
-    assert whisper.transcribe_video('video', audio, backend=backend)[1] == backend
+    monkeypatch.setattr(asr, 'extract_audio', lambda *a: audio)
+    monkeypatch.setattr(asr, '_transcribe_file', lambda b, k, p: [{'start': 0, 'end': 1, 'text': 'ok'}])
+    assert asr.transcribe_video('video', audio, backend=backend)[1] == backend

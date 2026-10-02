@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Transcribe a video via local WhisperX or the Groq/OpenAI Whisper APIs.
+"""Transcribe audio via MiniMax ASR or the Groq/OpenAI Whisper APIs.
 
 Strategy: extract audio (mono 16kHz mp3, tiny payload), upload to whichever
 API has a key. Returns segments in the same shape as transcribe.parse_vtt so
 the rest of the pipeline (filter_range, format_transcript) doesn't care where
 the transcript came from.
 
-Pure stdlib — no `pip install groq` or `pip install openai` needed.
+Pure stdlib — no external SDK needed.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import io
 import json
 import math
 import mimetypes
+import os
 import shutil
 import ssl
 import sys
@@ -34,6 +35,29 @@ GROQ_MODEL = "whisper-large-v3"
 OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_MODEL = "whisper-1"
 
+MINIMAX_MODEL = os.environ.get("MINIMAX_MODEL", "asr-1.0")
+MINIMAX_MAX_CHUNK_SECONDS = 300.0
+MINIMAX_MAX_UPLOAD_BYTES = 48_000_000
+
+
+def get_minimax_endpoint() -> str:
+    """Resolve MiniMax API endpoint supporting custom endpoint, base URL, and CN vs Global regions."""
+    if os.environ.get("MINIMAX_ENDPOINT"):
+        return os.environ["MINIMAX_ENDPOINT"]
+    base = os.environ.get("MINIMAX_BASE_URL") or os.environ.get("MINIMAX_API_HOST")
+    if base:
+        return f"{base.rstrip('/')}/v1/speech_to_text"
+    region = os.environ.get("MINIMAX_REGION", "").strip().lower()
+    if not region:
+        try:
+            from config import get_config
+            region = get_config().get("minimax_region", "cn")
+        except Exception:
+            region = "cn"
+    if region in ("global", "io", "international"):
+        return "https://api.minimax.io/v1/speech_to_text"
+    return "https://api.minimax.cn/v1/speech_to_text"
+
 # Both Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. We target a
 # margin under that so multipart framing overhead never pushes a chunk over.
 MAX_UPLOAD_BYTES = 24_000_000
@@ -44,8 +68,9 @@ def plan_chunks(
     total_seconds: float,
     total_bytes: int,
     max_bytes: int = MAX_UPLOAD_BYTES,
+    max_seconds: float | None = None,
 ) -> list[tuple[float, float]]:
-    """Split a duration into contiguous (offset, duration) chunks under max_bytes.
+    """Split a duration into contiguous (offset, duration) chunks under max_bytes and max_seconds.
 
     Size scales linearly with duration (constant-bitrate mono mp3), so an even
     time split yields evenly-sized chunks. Returns a single full-length chunk
@@ -53,12 +78,14 @@ def plan_chunks(
     """
     if not math.isfinite(total_seconds) or total_seconds < 0 or max_bytes <= 0 or total_bytes < 0:
         raise SystemExit("Invalid audio chunk duration or byte budget")
-    if total_bytes > max_bytes and total_seconds <= 0:
+    if ((total_bytes > max_bytes) or (max_seconds is not None and total_seconds > max_seconds)) and total_seconds <= 0:
         raise SystemExit("Cannot split oversized audio with unknown duration")
-    if total_bytes <= max_bytes or total_seconds <= 0:
+    if (total_bytes <= max_bytes and (max_seconds is None or total_seconds <= max_seconds)) or total_seconds <= 0:
         return [(0.0, total_seconds)]
 
-    n = math.ceil(total_bytes / max_bytes)
+    n_bytes = math.ceil(total_bytes / max_bytes) if max_bytes > 0 else 1
+    n_seconds = math.ceil(total_seconds / max_seconds) if max_seconds and max_seconds > 0 else 1
+    n = max(n_bytes, n_seconds)
     chunk = total_seconds / n
     plan: list[tuple[float, float]] = []
     for i in range(n):
@@ -291,11 +318,102 @@ def shift_segments(segments: list[dict], offset_seconds: float) -> list[dict]:
     ]
 
 
+def _post_minimax(endpoint: str, api_key: str, model: str, audio_path: Path) -> dict:
+    if audio_path.stat().st_size > MINIMAX_MAX_UPLOAD_BYTES:
+        raise SystemExit(f"Audio file exceeds the {MINIMAX_MAX_UPLOAD_BYTES}-byte upload budget; split it before upload.")
+    fields = {
+        "model": model,
+        "response_format": "verbose_json",
+    }
+    body, boundary = _build_multipart(fields, audio_path)
+    if len(body) > 50_000_000:
+        raise SystemExit("Multipart request exceeds the 50,000,000-byte limit.")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "watch-skill/1.0 (+claude-code; python-urllib)",
+    }
+
+    context = ssl.create_default_context()
+    rate_limit_hits = 0
+    last_exc: Exception | None = None
+    last_detail = ""
+
+    for attempt in range(MAX_ATTEMPTS):
+        request = Request(endpoint, data=body, headers=headers, method="POST")
+        try:
+            with urlopen(request, timeout=300, context=context) as response:
+                payload = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            detail = _read_error_body(exc)
+            last_exc, last_detail = exc, detail
+
+            if exc.code == 401:
+                region_hint = (
+                    " Note: MiniMax has separate CN (api.minimax.cn) and Global (api.minimax.io) accounts and API keys. "
+                    "If using an international account, set MINIMAX_REGION=global in ~/.config/watch/.env."
+                )
+                raise SystemExit(f"MiniMax request failed: HTTP 401 Unauthorized{detail}.{region_hint}")
+
+            if 400 <= exc.code < 500 and exc.code != 429:
+                raise SystemExit(f"MiniMax request failed: {exc}{detail}")
+
+            if exc.code == 429:
+                rate_limit_hits += 1
+                if rate_limit_hits >= MAX_429_RETRIES:
+                    raise SystemExit(f"MiniMax request failed: {exc}{detail}")
+                delay = _retry_after(exc) or RETRY_BASE_DELAY * (2 ** attempt) + 1
+            else:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+
+            if attempt < MAX_ATTEMPTS - 1:
+                print(
+                    f"[watch] minimax HTTP {exc.code} — retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 2}/{MAX_ATTEMPTS})",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+            continue
+        except (urllib.error.URLError, TimeoutError, ConnectionResetError, OSError) as exc:
+            last_exc, last_detail = exc, ""
+            if attempt < MAX_ATTEMPTS - 1:
+                delay = RETRY_BASE_DELAY * (attempt + 1)
+                print(
+                    f"[watch] minimax network error ({type(exc).__name__}: {exc}) — "
+                    f"retrying in {delay:.1f}s (attempt {attempt + 2}/{MAX_ATTEMPTS})",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+            continue
+
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"MiniMax returned non-JSON response: {exc}")
+
+        base_resp = data.get("base_resp")
+        if isinstance(base_resp, dict) and base_resp.get("status_code", 0) != 0:
+            msg = base_resp.get("status_msg", "unknown error")
+            code = base_resp.get("status_code")
+            raise SystemExit(f"MiniMax request failed: {msg} (status_code {code})")
+
+        return data
+
+    raise SystemExit(
+        f"MiniMax request failed after {MAX_ATTEMPTS} attempts: {last_exc}{last_detail}"
+    )
+
+
 def _segments_from_response(data: dict) -> list[dict]:
+    if isinstance(data, dict) and isinstance(data.get("segments"), list):
+        data["segments"] = [
+            s for s in data["segments"]
+            if isinstance(s, dict) and isinstance(s.get("text"), str) and s["text"].strip()
+        ]
     try:
         return normalize_segments(data)
     except (ValueError, TypeError) as exc:
-        raise SystemExit(f"Whisper returned malformed segments: {exc}") from None
+        raise SystemExit(f"ASR returned malformed segments: {exc}") from None
 
 
 def transcribe_chunks(
@@ -339,8 +457,11 @@ def _transcribe_file(backend: str, api_key: str, audio_path: Path) -> list[dict]
         response = _post_whisper(GROQ_ENDPOINT, api_key, GROQ_MODEL, audio_path)
     elif backend == "openai":
         response = _post_whisper(OPENAI_ENDPOINT, api_key, OPENAI_MODEL, audio_path)
+    elif backend == "minimax":
+        endpoint = get_minimax_endpoint()
+        response = _post_minimax(endpoint, api_key, MINIMAX_MODEL, audio_path)
     else:
-        raise SystemExit(f"Unknown whisper backend: {backend}")
+        raise SystemExit(f"Unknown transcription backend: {backend}")
     return _segments_from_response(response)
 
 
@@ -355,14 +476,8 @@ def transcribe_video(
     Returns (segments, backend_used). Raises SystemExit on any failure.
     """
     if api_key is not None and backend is None:
-        raise SystemExit("An API key requires an explicit groq or openai backend.")
-    if backend == "whisperx":
-        if api_key is not None:
-            raise SystemExit("WhisperX does not accept an API key.")
-        from local_whisperx import transcribe_audio
-        segments = transcribe_audio(extract_audio(video_path, audio_out))
-        return segments, "whisperx"
-    if backend not in (None, "groq", "openai"):
+        raise SystemExit("An API key requires an explicit backend.")
+    if backend not in (None, "minimax", "groq", "openai"):
         raise SystemExit("Unknown transcription backend.")
     if backend is None or api_key is None:
         detected_backend, detected_key = load_api_key(preferred=backend)
@@ -372,39 +487,50 @@ def transcribe_video(
     if not backend or not api_key:
         setup_py = Path(__file__).resolve().parent / "setup.py"
         raise SystemExit(
-            "No Whisper API key available. Set GROQ_API_KEY (preferred) or OPENAI_API_KEY "
+            "No transcription API key available. Set MINIMAX_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY "
             "in the environment or in ~/.config/watch/.env. "
             f"Run `python3 {setup_py}` to configure."
         )
 
-    print(f"[watch] extracting audio for Whisper ({backend})…", file=sys.stderr)
+    print(f"[watch] extracting audio for transcription ({backend})…", file=sys.stderr)
     audio_path = extract_audio(video_path, audio_out)
     audio_bytes = audio_path.stat().st_size
 
     def transcribe_one(path: Path) -> list[dict]:
         return _transcribe_file(backend, api_key, path)
 
-    if audio_bytes <= MAX_UPLOAD_BYTES:
+    if backend == "minimax":
+        max_bytes = MINIMAX_MAX_UPLOAD_BYTES
+        max_seconds = MINIMAX_MAX_CHUNK_SECONDS
+    else:
+        max_bytes = MAX_UPLOAD_BYTES
+        max_seconds = None
+
+    needs_split = audio_bytes > max_bytes
+    if not needs_split and max_seconds is not None:
+        needs_split = audio_duration(audio_path) > max_seconds
+
+    if not needs_split:
         print(
-            f"[watch] audio: {audio_bytes / 1024:.0f} kB — uploading to {backend} Whisper…",
+            f"[watch] audio: {audio_bytes / 1024:.0f} kB — uploading to {backend}…",
             file=sys.stderr,
         )
         segments = transcribe_one(audio_path)
     else:
         duration = audio_duration(audio_path)
-        plan = plan_chunks(duration, audio_bytes, MAX_UPLOAD_BYTES - 64_000)
+        budget_bytes = max_bytes - 64_000
+        plan = plan_chunks(duration, audio_bytes, budget_bytes, max_seconds)
         print(
-            f"[watch] audio: {audio_bytes / (1024 * 1024):.0f} MB exceeds "
-            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB — splitting into {len(plan)} chunks…",
+            f"[watch] audio exceeds limits — splitting into {len(plan)} chunks…",
             file=sys.stderr,
         )
         chunks = split_audio(audio_path, audio_out.parent / "chunks", plan)
-        if any(path.stat().st_size > MAX_UPLOAD_BYTES for path, _ in chunks):
+        if any(path.stat().st_size > max_bytes for path, _ in chunks):
             raise SystemExit("A split audio chunk exceeds the upload budget; no chunks were uploaded.")
         segments = transcribe_chunks(chunks, transcribe_one)
 
     if not segments:
-        print("[watch] Whisper detected no speech", file=sys.stderr)
+        print(f"[watch] {backend} detected no speech", file=sys.stderr)
 
     print(f"[watch] transcribed {len(segments)} segments via {backend}", file=sys.stderr)
     return segments, backend
@@ -413,10 +539,10 @@ def transcribe_video(
 if __name__ == "__main__":
     import argparse
     configure_stdio()
-    parser = argparse.ArgumentParser(description="Transcribe local media with the selected Whisper backend.")
+    parser = argparse.ArgumentParser(description="Transcribe local media with the selected ASR backend.")
     parser.add_argument("video")
     parser.add_argument("audio_out", nargs="?", default="audio.mp3", type=Path)
-    parser.add_argument("--backend", choices=["groq", "openai", "whisperx"])
+    parser.add_argument("--backend", choices=["minimax", "groq", "openai"])
     args = parser.parse_args()
     try:
         segments, backend = transcribe_video(args.video, Path(args.audio_out), backend=args.backend)

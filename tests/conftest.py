@@ -36,10 +36,10 @@ def isolated_user(monkeypatch, tmp_path):
         monkeypatch.setattr(sys.modules["setup"], "CONFIG_DIR", config.CONFIG_DIR)
         monkeypatch.setattr(sys.modules["setup"], "CONFIG_FILE", config.CONFIG_FILE)
         sys.modules["setup"]._PERM_WARNED.clear()
-    import whisper
+    import asr
     def no_upload(*args, **kwargs):
         raise AssertionError("Tests must mock cloud uploads")
-    monkeypatch.setattr(whisper, "urlopen", no_upload)
+    monkeypatch.setattr(asr, "urlopen", no_upload)
 
 # 14 visually distinct fills → 14 abrupt cuts → x264 emits a keyframe per cut.
 COLORS = [
