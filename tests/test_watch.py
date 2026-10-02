@@ -90,50 +90,53 @@ import watch
 from transcribe import Segments
 
 
-def _caption_context(monkeypatch, tmp_path, body):
-    subtitle = tmp_path / 'captions.vtt'
+def _caption_context(tmp_path, body):
+    media = tmp_path / 'video.mp4'
+    media.write_bytes(b'video')
+    subtitle = tmp_path / 'video.vtt'
     subtitle.write_text('WEBVTT\n\n' + body)
-    monkeypatch.setattr(watch, 'fetch_captions', lambda *a, **kw: {
-        'subtitle_path': str(subtitle), 'info': {'title': '안녕', 'duration': 30},
-        'caption_track': {'language': 'ko', 'kind': 'manual', 'provenance': 'original'},
-    })
-    return subtitle
+    return media
 
 
 def test_silent_focus_never_calls_asr(monkeypatch, tmp_path, capsys):
-    _caption_context(monkeypatch, tmp_path, '00:00.000 --> 00:10.000\nhello\n')
-    monkeypatch.setattr(watch, 'download', lambda *a, **kw: pytest.fail('caption-only focus must not download'))
+    media = _caption_context(tmp_path, '00:00.000 --> 00:10.000\nhello\n')
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 30, 'has_audio': True, 'has_video': False})
     monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: pytest.fail('a silent focus is not a missing track'))
-    monkeypatch.setattr(sys, 'argv', ['watch', 'https://example.com/video', '--detail', 'transcript', '--start', '20', '--end', '30'])
+    monkeypatch.setattr(sys, 'argv', ['watch', str(media), '--detail', 'transcript', '--start', '20', '--end', '30'])
     assert watch.main() == 0
     assert 'no speech in selected range' in capsys.readouterr().out
 
 
-def test_good_captions_survive_media_failure(monkeypatch, tmp_path, capsys):
-    _caption_context(monkeypatch, tmp_path, '00:00.000 --> 00:10.000\nhello\n')
-    def fail(*a, **kw):
-        raise SystemExit('blocked download')
-    monkeypatch.setattr(watch, 'download', fail)
+def test_urls_are_rejected(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['watch', 'https://example.com/video'])
-    assert watch.main() == 0
-    out = capsys.readouterr().out
-    assert 'hello' in out and 'Media unavailable' in out and 'ko, manual, original' in out
+    with pytest.raises(SystemExit) as exc:
+        watch.main()
+    assert 'URLs are not supported' in str(exc.value)
 
 
-def test_good_captions_survive_probe_denial(monkeypatch, tmp_path, capsys):
-    _caption_context(monkeypatch, tmp_path, '00:00.000 --> 00:10.000\nhello\n')
-    monkeypatch.setattr(watch, 'download', lambda *a, **kw: {'video_path': 'media.mp4'})
-    def fail(*a):
-        raise SystemExit('Cannot run ffprobe (PermissionError)')
-    monkeypatch.setattr(watch, 'get_metadata', fail)
-    monkeypatch.setattr(sys, 'argv', ['watch', 'https://example.com/video'])
+def test_missing_local_file_is_rejected(monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['watch', '/nonexistent/media.mp4'])
+    with pytest.raises(SystemExit) as exc:
+        watch.main()
+    assert 'File not found' in str(exc.value)
+
+
+def test_audio_only_input_skips_frames(monkeypatch, tmp_path, capsys):
+    audio = tmp_path / 'audio.mp3'
+    audio.write_bytes(b'dummy')
+    monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 10, 'has_audio': True, 'has_video': False})
+    monkeypatch.setattr(watch, 'load_api_key', lambda *a: ('groq', 'dummy'))
+    monkeypatch.setattr(watch, 'transcribe_video', lambda *a, **kw: ([{'start': 0, 'end': 1, 'text': 'spoken'}], 'groq'))
+    monkeypatch.setattr(sys, 'argv', ['watch', str(audio)])
     assert watch.main() == 0
     out = capsys.readouterr().out
-    assert 'hello' in out and 'PermissionError' in out
+    assert 'audio report' in out
+    assert 'skipped (audio-only input)' in out
+    assert 'spoken' in out
 
 
 def _mock_audio(monkeypatch):
-    monkeypatch.setattr(watch, 'download', lambda *a, **kw: {'video_path': 'video.mp4'})
+    monkeypatch.setattr(watch, 'resolve_source', lambda src: (Path(src), None))
     monkeypatch.setattr(watch, 'get_metadata', lambda *a: {'duration_seconds': 30, 'has_audio': True, 'has_video': False})
 
 

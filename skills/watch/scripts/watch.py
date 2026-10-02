@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""/watch entry point: download video, extract frames, parse transcript.
+"""/watch entry point: analyze local video or audio files, extract frames, parse transcript.
 
 Prints a markdown report to stdout listing frame paths + transcript. Claude
 then Reads each frame path to see the video.
@@ -18,19 +18,39 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from config import ConfigError, frame_cap, get_config  # noqa: E402
-from download import download, fetch_captions, is_url, auth_args  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps, validate_controls  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
 from asr import load_api_key, transcribe_video  # noqa: E402
 from runtime import configure_stdio  # noqa: E402
 
 
+def resolve_source(source: str) -> tuple[Path, Path | None]:
+    """Validate source path and find optional companion subtitle file.
+
+    Returns (media_path, subtitle_path).
+    Rejects URLs and nonexistent files.
+    """
+    if source.startswith(("http://", "https://")) or "://" in source:
+        raise SystemExit("URLs are not supported; please provide a local video or audio file.")
+    p = Path(source).expanduser().resolve()
+    if not p.is_file():
+        raise SystemExit(f"File not found: {p}")
+
+    subtitle_path = None
+    for candidate in (p.with_suffix(".vtt"), p.parent / f"{p.name}.vtt"):
+        if candidate.is_file():
+            subtitle_path = candidate
+            break
+
+    return p, subtitle_path
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="watch",
-        description="Download a video, extract auto-scaled frames, and surface the transcript.",
+        description="Analyze a local video or audio file, extract auto-scaled frames, and surface the transcript.",
     )
-    ap.add_argument("source", help="Video URL or local file path")
+    ap.add_argument("source", help="Local video or audio file path")
     ap.add_argument("--max-frames", type=int, default=None, help="Override frame cap")
     ap.add_argument("--resolution", type=int, default=512, help="Frame width in pixels (default 512)")
     ap.add_argument("--fps", type=float, default=None, help="Override auto-fps")
@@ -74,11 +94,8 @@ def main() -> int:
              "frames (static screen recordings, held slides) instead of collapsing them.",
     )
     ap.add_argument("--sub-lang", default=None, help="Exact caption language preference (default auto/native)")
-    cookies = ap.add_mutually_exclusive_group()
-    cookies.add_argument("--cookies", default=None, help="Explicit cookie file (yt-dlp may update this jar)")
-    cookies.add_argument("--cookies-from-browser", default=None, help="Explicit yt-dlp browser selector")
     ap.add_argument("--question", default=None,
-                    help="The user's question about the video.")
+                    help="The user's question about the video or audio.")
     args = ap.parse_args()
     args.no_whisper = args.no_asr
     args.whisper = args.asr
@@ -93,71 +110,43 @@ def main() -> int:
     validate_controls(args.resolution, max_frames, start_sec, end_sec, args.fps)
     cue_timestamps = parse_timestamps(args.timestamps)
     backend_choice = "none" if args.no_asr else (args.asr or config.get("asr_backend") or config.get("whisper_backend"))
-    cookies_file = args.cookies if args.cookies is not None else (None if args.cookies_from_browser else config["cookies_file"])
-    cookies_browser = args.cookies_from_browser if args.cookies_from_browser is not None else (None if args.cookies else config["cookies_from_browser"])
-    auth_args(cookies_file, cookies_browser)  # Validate even before starting network work.
-    auth = {"cookies_file": cookies_file, "cookies_from_browser": cookies_browser}
+
+    media_path, subtitle_path = resolve_source(args.source)
+    video_path = str(media_path)
+    title = media_path.name
 
     parent = Path(args.out_dir).expanduser().resolve() if args.out_dir else None
     if parent:
         parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="watch-", dir=parent))
     print(f"[watch] working dir: {work}", file=sys.stderr)
-    url_source = is_url(args.source)
-    dl = {"subtitle_path": None, "info": {}, "downloaded": False}
+
     errors = []
     all_segments = []
     track_available = False
     transcript_source = None
-    video_path = None
     visual_error = None
     gaps = []
 
-    if url_source:
-        print("[watch] checking metadata/captions via yt-dlp…", file=sys.stderr)
-        dl = fetch_captions(args.source, work / "download", sub_lang=args.sub_lang or config["sub_lang"], **auth)
-        errors.extend(dl.get("errors", []))
-        if dl.get("subtitle_path"):
-            try:
-                all_segments = parse_vtt(dl["subtitle_path"])
-                track_available = bool(all_segments)
-                track = dl.get("caption_track") or {}
-                transcript_source = (f"captions ({track.get('language', 'unknown')}, "
-                                     f"{track.get('kind', 'unknown')}, {track.get('provenance', 'unknown')})")
-            except (OSError, ValueError) as exc:
-                errors.append(f"Caption parsing failed: {exc}")
-
-    audio_only = detail == "transcript" and not cue_timestamps
-    # Captions are assessed before range filtering: a quiet interval is not a missing track.
-    need_media = not (audio_only and (track_available or backend_choice == "none") and url_source)
-    if need_media:
+    if subtitle_path:
         try:
-            print("[watch] downloading media…" if url_source else "[watch] using local file…", file=sys.stderr)
-            media = download(args.source, work / "download", audio_only=audio_only,
-                             **({"context": dl, **auth} if url_source else {}))
-            dl.update(media)
-            video_path = dl["video_path"]
-        except SystemExit as exc:
-            visual_error = f"Media unavailable: {exc}"
-            errors.append(visual_error)
+            all_segments = parse_vtt(str(subtitle_path))
+            track_available = bool(all_segments)
+            transcript_source = f"local captions ({subtitle_path.name})"
+        except (OSError, ValueError) as exc:
+            errors.append(f"Caption parsing failed: {exc}")
 
-    try:
-        duration = float((dl.get("info") or {}).get("duration") or 0)
-        if not math.isfinite(duration) or duration < 0:
-            duration = 0.0
-    except (TypeError, ValueError):
-        duration = 0.0
-    meta = {"duration_seconds": duration, "width": None, "height": None, "codec": None,
+    meta = {"duration_seconds": 0.0, "width": None, "height": None, "codec": None,
             "has_audio": False, "has_video": False}
-    if video_path:
-        try:
-            meta = get_metadata(video_path)
-        except SystemExit as exc:
-            visual_error = f"Visuals/audio metadata unavailable: {exc}"
-            errors.append(visual_error)
+    try:
+        meta = get_metadata(video_path)
+    except SystemExit as exc:
+        visual_error = f"Visuals/audio metadata unavailable: {exc}"
+        errors.append(visual_error)
+
     full_duration = meta["duration_seconds"]
     if full_duration > 0 and start_sec is not None and start_sec >= full_duration:
-        raise SystemExit(f"--start {start_sec:.1f}s is past end of video ({full_duration:.1f}s)")
+        raise SystemExit(f"--start {start_sec:.1f}s is past end of media ({full_duration:.1f}s)")
     effective_start = start_sec or 0.0
     effective_end = min(end_sec, full_duration) if end_sec is not None and full_duration > 0 else end_sec or full_duration
     effective_duration = max(0.0, effective_end - effective_start)
@@ -174,7 +163,9 @@ def main() -> int:
     frame_meta = {"engine": "none", "candidate_count": 0, "selected_count": 0, "fallback": False}
     cue_meta = {}
     detail_budget = max_frames
-    if video_path and meta.get("has_video", bool(meta.get("width"))):
+    is_video = bool(meta.get("has_video", bool(meta.get("width"))))
+
+    if video_path and is_video:
         try:
             if cue_timestamps:
                 cue_frames, cue_meta = extract_at_timestamps(
@@ -191,8 +182,9 @@ def main() -> int:
         except SystemExit as exc:
             visual_error = f"Visual extraction unavailable: {exc}"
             errors.append(visual_error)
-    elif video_path and not visual_error and (detail != "transcript" or cue_timestamps):
-        visual_error = "No video stream; visual evidence is unavailable."
+    elif video_path and not is_video and not visual_error and (detail != "transcript" or cue_timestamps):
+        pass  # Audio-only input; skipping frames naturally
+
     if cue_frames:
         frames = merge_frames(frames, cue_frames)
 
@@ -226,10 +218,10 @@ def main() -> int:
     for error in errors:
         print(f"[watch] {error}", file=sys.stderr)
 
-    info = dl.get("info") or {}
+    media_kind = "video" if is_video else "audio"
 
     print()
-    print("# watch: video report")
+    print(f"# watch: {media_kind} report")
     print()
     print(f"- **Source:** {args.source}")
     if video_path:
@@ -238,10 +230,7 @@ def main() -> int:
         print(f"- **Visual status:** {visual_error}")
     if errors:
         print("- **Result:** partial evidence" if frames or transcript_segments else "- **Result:** unavailable evidence")
-    if info.get("title"):
-        print(f"- **Title:** {info['title']}")
-    if info.get("uploader"):
-        print(f"- **Uploader:** {info['uploader']}")
+    print(f"- **Title:** {title}")
     print(f"- **Duration:** {format_time(full_duration)} ({full_duration:.1f}s)")
     if focused:
         print(
@@ -253,7 +242,9 @@ def main() -> int:
     range_mode = "focused" if focused else "full"
     print(f"- **Detail:** {detail}")
     detail_count = frame_meta.get("selected_count", 0)
-    if detail != "transcript":
+    if not is_video:
+        print("- **Frames:** skipped (audio-only input)")
+    elif detail != "transcript":
         cap_label = "unlimited" if detail_budget is None else str(detail_budget)
         engine = frame_meta.get("engine", "scene")
         fallback = " fallback" if frame_meta.get("fallback") else ""
@@ -288,14 +279,14 @@ def main() -> int:
             end = gap["end"] if gap["end"] is not None else full_duration
             print(f"  - {format_time(gap['start'])} → {format_time(end)}")
 
-    if detail == "token-burner" and len(frames) > 250:
+    if is_video and detail == "token-burner" and len(frames) > 250:
         print()
         print(
             f"> **Warning:** token-burner detail selected {len(frames)} frames. "
             "This may use a large number of image tokens."
         )
 
-    if not focused and full_duration > 600 and detail not in ("transcript", "token-burner"):
+    if is_video and not focused and full_duration > 600 and detail not in ("transcript", "token-burner"):
         mins = int(full_duration // 60)
         print()
         print(

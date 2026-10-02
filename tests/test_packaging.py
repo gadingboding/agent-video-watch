@@ -40,5 +40,5 @@ def test_skill_documents_and_bundles_runtime():
     skill = (ROOT / 'skills/watch/SKILL.md').read_text(encoding='utf-8')
     assert 'CLAUDE_SKILL_DIR' not in skill
     runtime = sorted(p.name for p in (ROOT / 'skills/watch/scripts').glob('*.py'))
-    assert runtime == ['asr.py', 'config.py', 'download.py', 'frames.py',
+    assert runtime == ['asr.py', 'config.py', 'frames.py',
                        'runtime.py', 'setup.py', 'transcribe.py', 'watch.py']

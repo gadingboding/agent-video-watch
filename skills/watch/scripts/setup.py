@@ -42,10 +42,7 @@ def _which(name):
 
 
 def _check_binaries():
-    missing = [name for name in REQUIRED_BINARIES if not _which(name)]
-    if not (_which('uvx') or _which('uv') or _which('yt-dlp')):
-        missing.append('uvx')
-    return missing
+    return [name for name in REQUIRED_BINARIES if not _which(name)]
 
 
 def _check_file_permissions(path: Path) -> None:
@@ -90,8 +87,6 @@ def _brew_pkg(missing):
     for name in missing:
         if name in ('ffmpeg', 'ffprobe'):
             pkgs.append('ffmpeg')
-        elif name == 'uvx':
-            pkgs.append('uv')
         else:
             pkgs.append(name)
     return list(dict.fromkeys(pkgs))
@@ -104,8 +99,7 @@ def _install_step(cmd, step):
     except OSError as exc:
         raise SystemExit(f'{step}: cannot run {cmd[0]} ({type(exc).__name__}); install or repair that executable, then retry.') from None
     if result.returncode:
-        raise SystemExit(f'{step} failed (exit {result.returncode}): retry setup after checking the error above. '
-                         'For WhisperX, allow at least 3 GB free disk and 8 GB RAM; package/model downloads need network access.')
+        raise SystemExit(f'{step} failed (exit {result.returncode}): retry setup after checking the error above.')
 
 
 def _install_macos(missing):
@@ -116,21 +110,11 @@ def _install_macos(missing):
 
 
 def _install_hint_linux(missing):
-    hints = []
-    if 'ffmpeg' in _brew_pkg(missing):
-        hints.append('apt: sudo apt install ffmpeg (or the equivalent package for your distribution)')
-    if 'uvx' in missing:
-        hints.append('Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh')
-    return '\n'.join(hints)
+    return 'sudo apt install ffmpeg (or the equivalent package for your distribution)'
 
 
 def _install_hint_windows(missing):
-    hints = []
-    if 'ffmpeg' in _brew_pkg(missing):
-        hints.append('winget install --id Gyan.FFmpeg --exact')
-    if 'uvx' in missing:
-        hints.append('winget install --id astral-sh.uv --exact')
-    return '\n'.join(hints) + '\nReopen your terminal/agent after PATH changes.'
+    return 'winget install --id Gyan.FFmpeg --exact\nReopen your terminal/agent after PATH changes.'
 
 
 def _probe(cmd):
@@ -160,21 +144,11 @@ def _status(detailed=False):
               'config_file': str(CONFIG_FILE),
               'watch_detail': cfg['detail'], 'platform': platform.system()}
     if detailed:
-        from download import ytdlp_cmd
         tools = {}
         for name in REQUIRED_BINARIES:
             path = _which(name)
             tools[name] = {'path': path, **(_probe([path, '-version']) if path else {'ok': False})}
-        runner = ytdlp_cmd()
-        ytdlp_probe = _probe([*runner, '--version'])
-        tools['yt-dlp'] = {'runner': ' '.join(runner), 'ok': ytdlp_probe.get('ok', False), **ytdlp_probe}
         result['tools'] = tools
-        result['youtube'] = {
-            'deno': _which('deno'), 'node': _which('node'),
-            'ejs': 'bundled via uvx (yt-dlp-ejs)' if any('uv' in p for p in runner[:2]) else 'unknown',
-            'impersonation': _probe([*runner, '--ignore-config', '--list-impersonate-targets']) if ytdlp_probe.get('ok') else None,
-            'update_hint': 'Executed via uvx (yt-dlp[default,curl-cffi]); isolated and updated automatically.',
-        }
     return result
 
 

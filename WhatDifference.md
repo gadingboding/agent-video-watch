@@ -8,10 +8,12 @@
 - 移除了 `watch.py`、`setup.py`、`config.py` 中的 `--engine` 参数、Gemini 依赖检测、`GEMINI_API_KEY` 及相关配置。
 - 清理了 `SKILL.md`、`README.md` 与测试用例中的 Gemini 相关内容。
 
-### 2. `yt-dlp` 改为直接通过 `uvx` 运行（免本地预装）
-- 无需本地预装 `yt-dlp`，改为在需要时直接通过 `uvx --quiet --from "yt-dlp[default,curl-cffi]" yt-dlp` 运行。
-- `download.py` 中新增 `ytdlp_cmd()` 优先调用 `uvx`。
-- `setup.py` 中的基础前置依赖由系统安装 `yt-dlp` 改为依赖 `uvx`。
+### 2. 彻底移除网络下载功能（yt-dlp），仅支持本地视频/音频作为输入
+- 彻底移除 `yt-dlp` 下载、URL 解析与远程字幕获取逻辑，删除了 `skills/watch/scripts/download.py` 与 `tests/test_download.py`。
+- 移除了 `--cookies`、`--cookies-from-browser`、`WATCH_COOKIES_FILE`、`WATCH_COOKIES_FROM_BROWSER` 相关参数与配置。
+- 仅允许本地视频或音频文件作为输入（若传入 URL 会直接提示拒绝执行）。
+- 增加了对纯音频输入（如 `.mp3`, `.wav`, `.m4a` 等）的原生支持：自动检测无画面流时智能跳过抽帧阶段，仅执行语音转写（ASR）。
+- 系统前置二进制依赖大幅简化：仅需系统自带或安装 `ffmpeg` 与 `ffprobe`，无需再依赖 `yt-dlp` 或 `uvx`。
 
 ### 3. ASR（语音识别）服务重构与 MiniMax ASR 支持
 - **移除本地 WhisperX 及其重型依赖**：
